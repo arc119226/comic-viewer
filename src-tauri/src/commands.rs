@@ -121,30 +121,28 @@ pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
             .to_string_lossy()
             .to_string();
 
-        let cover_base64 = match fs::File::open(&file_path) {
-            Ok(file) => match ZipArchive::new(file) {
-                Ok(mut archive) => {
-                    let indices = sorted_image_indices(&mut archive);
-                    if let Some(&first_idx) = indices.first() {
-                        read_entry_as_base64(&mut archive, first_idx).unwrap_or_default()
-                    } else {
-                        String::new()
-                    }
-                }
-                Err(_) => String::new(),
-            },
-            Err(_) => String::new(),
-        };
-
         entries.push(ComicEntry {
             filename: display_name,
             path: file_path.to_string_lossy().to_string(),
-            cover_base64,
+            cover_base64: String::new(),
         });
     }
 
     entries.sort_by(|a, b| natural_compare(&a.filename, &b.filename));
     Ok(entries)
+}
+
+#[tauri::command]
+pub async fn get_cover(path: String) -> Result<String, String> {
+    let file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let indices = sorted_image_indices(&mut archive);
+
+    if let Some(&first_idx) = indices.first() {
+        read_entry_as_base64(&mut archive, first_idx)
+    } else {
+        Ok(String::new())
+    }
 }
 
 #[tauri::command]

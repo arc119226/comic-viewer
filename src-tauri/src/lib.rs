@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{get_comic_info, load_page, scan_folder};
+use commands::{get_comic_info, get_cover, load_page, scan_folder};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -8,6 +8,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             scan_folder,
+            get_cover,
             get_comic_info,
             load_page,
         ])
