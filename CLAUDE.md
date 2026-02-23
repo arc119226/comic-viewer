@@ -18,17 +18,20 @@ npx vite build           # Frontend build only
 
 ## Architecture
 
-- **Frontend** (`src/`): React SPA with two routes — HomePage (folder browser grid) and ReaderPage (vertical scroll reader with zoom)
-- **Backend** (`src-tauri/src/`): Rust commands exposed via Tauri IPC — `scan_folder`, `get_comic_info`, `load_page`
+- **Frontend** (`src/`): React SPA with two routes — HomePage (folder browser grid with search/sort) and ReaderPage (vertical scroll reader with zoom)
+- **Backend** (`src-tauri/src/`): Rust commands exposed via Tauri IPC — `scan_folder`, `get_cover`, `get_comic_info`, `load_page`
 - **IPC**: Frontend calls Rust via `invoke()` from `@tauri-apps/api/core`; data transferred as JSON (images as base64 data URIs)
+- **Cover loading**: Two-phase — `scan_folder` returns file list instantly, `get_cover` loads covers on demand via IntersectionObserver; covers cached in parent state to survive sort/filter changes
 
 ## Key Files
 
-- `src-tauri/src/commands.rs` — All Rust backend logic (ZIP reading, image extraction, natural sort)
+- `src-tauri/src/commands.rs` — All Rust backend logic (ZIP reading, image extraction, natural sort, recursive scan)
+- `src/pages/HomePage.tsx` — Folder browser with search, sort, cover cache management
 - `src/pages/ReaderPage.tsx` — Comic reader with scroll, lazy load, zoom
-- `src/hooks/useLazyLoad.ts` — IntersectionObserver-based lazy loading
-- `src/hooks/useZoom.ts` — Zoom state management (Ctrl+scroll, keyboard)
-- `src-tauri/tauri.conf.json` — Tauri app configuration
+- `src/components/ComicCard.tsx` — Cover card with lazy loading + hover overlay
+- `src/hooks/useLazyLoad.ts` — IntersectionObserver-based lazy loading for reader pages
+- `src/hooks/useZoom.ts` — Zoom state management (Ctrl+scroll on window, keyboard shortcuts)
+- `src-tauri/tauri.conf.json` — Tauri app configuration (zoomHotkeysEnabled: false to prevent WebView2 intercepting Ctrl+scroll)
 
 ## Code Conventions
 
@@ -36,6 +39,7 @@ npx vite build           # Frontend build only
 - TypeScript: strict mode, functional components, custom hooks for logic
 - Styling: Tailwind CSS v4 utility classes, dark theme (neutral-900 base)
 - Routing: react-router with query params for comic path (`/read?path=...`)
+- State: Cover cache lifted to HomePage, passed down via props to ComicGrid/ComicCard
 
 ## Dependencies
 

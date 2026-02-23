@@ -7,7 +7,10 @@ Browse local folders of ZIP comic files with thumbnail previews, and read them i
 ## Features
 
 - **Folder browsing** - Select a folder and see all `.zip` comics displayed as a cover grid
-- **Cover thumbnails** - First image in each ZIP is automatically extracted as the cover
+- **Recursive scanning** - Automatically finds comics in all subdirectories
+- **Cover thumbnails** - First image in each ZIP is lazily extracted as the cover
+- **Search & sort** - Filter comics by name, sort by name or path
+- **Hover preview** - Full filename overlay on cover hover
 - **Vertical infinite scroll** - Read comics in a single continuous page
 - **Lazy loading** - Only images near the viewport are loaded, keeping memory usage low
 - **Zoom** - Ctrl + scroll wheel (cursor-centered), Ctrl+0 / Ctrl++ / Ctrl+- shortcuts
@@ -49,10 +52,10 @@ npm run tauri build
 comic-viewer/
 ├── src/                          # React frontend
 │   ├── pages/
-│   │   ├── HomePage.tsx          # Folder browser + comic grid
+│   │   ├── HomePage.tsx          # Folder browser + search/sort + comic grid
 │   │   └── ReaderPage.tsx        # Vertical scroll reader + zoom
 │   ├── components/
-│   │   ├── ComicCard.tsx         # Single comic cover card
+│   │   ├── ComicCard.tsx         # Cover card with lazy load + hover overlay
 │   │   ├── ComicGrid.tsx         # Responsive grid layout
 │   │   ├── TopBar.tsx            # Navigation bar
 │   │   ├── ZoomIndicator.tsx     # Zoom level display
@@ -66,7 +69,7 @@ comic-viewer/
 │   └── main.tsx                  # Entry point
 ├── src-tauri/                    # Rust backend
 │   ├── src/
-│   │   ├── commands.rs           # Tauri commands (scan, load, info)
+│   │   ├── commands.rs           # Tauri commands (scan, cover, load, info)
 │   │   ├── lib.rs                # App builder + plugin registration
 │   │   └── main.rs               # Desktop entry point
 │   ├── Cargo.toml
@@ -78,11 +81,12 @@ comic-viewer/
 
 ## Rust Backend Commands
 
-| Command          | Description                                |
-| ---------------- | ------------------------------------------ |
-| `scan_folder`    | Scans a directory for `.zip` files, returns covers |
-| `get_comic_info` | Returns total page count for a comic       |
-| `load_page`      | Loads a single page by index as base64     |
+| Command          | Description                                      |
+| ---------------- | ------------------------------------------------ |
+| `scan_folder`    | Recursively scans a directory for `.zip` files   |
+| `get_cover`      | Extracts the first image from a ZIP as cover     |
+| `get_comic_info` | Returns total page count for a comic             |
+| `load_page`      | Loads a single page by index as base64           |
 
 ## Keyboard Shortcuts
 
@@ -97,4 +101,4 @@ comic-viewer/
 
 ## License
 
-ISC
+MIT
