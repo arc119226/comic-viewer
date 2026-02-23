@@ -51,7 +51,7 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
       onClick={handleClick}
       className="cursor-pointer group rounded-lg overflow-hidden bg-neutral-800 hover:ring-2 hover:ring-blue-500 transition-all"
     >
-      <div className="aspect-[2/3] bg-neutral-700 overflow-hidden">
+      <div className="aspect-[2/3] bg-neutral-700 overflow-hidden relative">
         {cover ? (
           <img
             src={cover}
@@ -67,6 +67,11 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
             )}
           </div>
         )}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-3 opacity-0 group-hover:opacity-100 transition-opacity">
+          <p className="text-xs text-white break-words leading-snug">
+            {comic.filename.replace(/\.zip$/i, "")}
+          </p>
+        </div>
       </div>
       <div className="p-2">
         <p
