@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 ::-webkit-scrollbar {
   width: 8px;

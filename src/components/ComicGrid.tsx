@@ -12,7 +12,7 @@ export default function ComicGrid({ comics, coverCache, onCoverLoaded }: Props) 
     return (
       <div className="flex justify-center items-center h-64">
         <p className="text-neutral-500">
-          No comics found. Select a folder containing .zip files.
+          No files found. Select a folder containing .zip, .md, or .txt files.
         </p>
       </div>
     );

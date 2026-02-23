@@ -1,0 +1,6 @@
+ChatTTS
+flask
+requests
+torch
+torchaudio
+numpy

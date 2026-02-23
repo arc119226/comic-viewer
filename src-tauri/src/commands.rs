@@ -5,6 +5,9 @@ use serde::Serialize;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::Mutex;
+use tauri::{Manager, State};
 use zip::ZipArchive;
 
 // ---------- Data Types ----------
@@ -14,6 +17,7 @@ pub struct ComicEntry {
     pub filename: String,
     pub path: String,
     pub cover_base64: String,
+    pub file_type: String,
 }
 
 #[derive(Serialize)]
@@ -22,9 +26,39 @@ pub struct ComicInfo {
     pub total_pages: usize,
 }
 
+#[derive(Serialize)]
+pub struct TextInfo {
+    pub filename: String,
+    pub file_type: String,
+    pub char_count: usize,
+    pub line_count: usize,
+}
+
+// ---------- TTS State ----------
+
+pub struct TtsState {
+    pub process: Option<Child>,
+    pub status: String,
+}
+
+impl Default for TtsState {
+    fn default() -> Self {
+        TtsState {
+            process: None,
+            status: "stopped".to_string(),
+        }
+    }
+}
+
 // ---------- Helpers ----------
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp"];
+
+const SUPPORTED_EXTENSIONS: &[(&str, &str)] = &[
+    ("zip", "zip"),
+    ("md", "md"),
+    ("txt", "txt"),
+];
 
 fn is_image_file(name: &str) -> bool {
     let lower = name.to_lowercase();
@@ -76,10 +110,8 @@ fn read_entry_as_base64(
     Ok(format!("data:{};base64,{}", mime, BASE64.encode(&buf)))
 }
 
-// ---------- Tauri Commands ----------
-
-/// Recursively collect all .zip files under a directory.
-fn collect_zips(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Recursively collect supported files (.zip, .md, .txt) under a directory.
+fn collect_files(dir: &Path, out: &mut Vec<(PathBuf, String)>) {
     let read_dir = match fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(_) => return,
@@ -87,19 +119,19 @@ fn collect_zips(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in read_dir.flatten() {
         let file_path = entry.path();
         if file_path.is_dir() {
-            collect_zips(&file_path, out);
-        } else {
-            let is_zip = file_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.eq_ignore_ascii_case("zip"))
-                .unwrap_or(false);
-            if is_zip {
-                out.push(file_path);
+            collect_files(&file_path, out);
+        } else if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+            for &(supported_ext, file_type) in SUPPORTED_EXTENSIONS {
+                if ext.eq_ignore_ascii_case(supported_ext) {
+                    out.push((file_path.clone(), file_type.to_string()));
+                    break;
+                }
             }
         }
     }
 }
+
+// ---------- Tauri Commands: File Scanning ----------
 
 #[tauri::command]
 pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
@@ -108,13 +140,12 @@ pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
         return Err(format!("Not a directory: {}", path));
     }
 
-    let mut zip_paths: Vec<PathBuf> = Vec::new();
-    collect_zips(dir, &mut zip_paths);
+    let mut file_paths: Vec<(PathBuf, String)> = Vec::new();
+    collect_files(dir, &mut file_paths);
 
     let mut entries: Vec<ComicEntry> = Vec::new();
 
-    for file_path in zip_paths {
-        // Show path relative to the selected folder, fallback to filename
+    for (file_path, file_type) in file_paths {
         let display_name = file_path
             .strip_prefix(dir)
             .unwrap_or(&file_path)
@@ -125,6 +156,7 @@ pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
             filename: display_name,
             path: file_path.to_string_lossy().to_string(),
             cover_base64: String::new(),
+            file_type,
         });
     }
 
@@ -177,4 +209,204 @@ pub async fn load_page(path: String, index: usize) -> Result<String, String> {
     })?;
 
     read_entry_as_base64(&mut archive, *real_index)
+}
+
+// ---------- Tauri Commands: Text Files ----------
+
+#[tauri::command]
+pub async fn load_text_file(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_text_info(path: String) -> Result<TextInfo, String> {
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let filename = Path::new(&path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let file_type = Path::new(&path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt")
+        .to_lowercase();
+
+    Ok(TextInfo {
+        filename,
+        file_type,
+        char_count: content.chars().count(),
+        line_count: content.lines().count(),
+    })
+}
+
+// ---------- Tauri Commands: TTS ----------
+
+#[tauri::command]
+pub async fn tts_start(
+    state: State<'_, Mutex<TtsState>>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let mut tts = state.lock().map_err(|e| e.to_string())?;
+    if tts.process.is_some() {
+        return Ok("already running".to_string());
+    }
+
+    // Try multiple locations for tts_server.py
+    let candidates = vec![
+        // Dev mode: CWD is src-tauri/, so go up one level
+        PathBuf::from("../python/tts_server.py"),
+        // If CWD is project root
+        PathBuf::from("python/tts_server.py"),
+        // Resource dir (production bundle)
+        app.path()
+            .resource_dir()
+            .ok()
+            .map(|d| d.join("python").join("tts_server.py"))
+            .unwrap_or_default(),
+    ];
+
+    let script_path = candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| "Cannot find python/tts_server.py".to_string())?;
+
+    let child = Command::new("python")
+        .arg(script_path.to_string_lossy().to_string())
+        .spawn()
+        .map_err(|e| format!("Failed to start TTS server: {}", e))?;
+
+    tts.process = Some(child);
+    tts.status = "starting".to_string();
+    Ok("started".to_string())
+}
+
+#[tauri::command]
+pub async fn tts_stop(state: State<'_, Mutex<TtsState>>) -> Result<String, String> {
+    let mut tts = state.lock().map_err(|e| e.to_string())?;
+    if let Some(ref mut child) = tts.process {
+        let _ = child.kill();
+    }
+    tts.process = None;
+    tts.status = "stopped".to_string();
+    Ok("stopped".to_string())
+}
+
+#[tauri::command]
+pub async fn tts_status(state: State<'_, Mutex<TtsState>>) -> Result<String, String> {
+    let should_ping = {
+        let mut tts = state.lock().map_err(|e| e.to_string())?;
+
+        // Check if process has exited unexpectedly
+        if let Some(ref mut child) = tts.process {
+            if let Ok(Some(_)) = child.try_wait() {
+                tts.process = None;
+                tts.status = "error".to_string();
+                return Ok("error".to_string());
+            }
+        }
+
+        tts.process.is_some() && tts.status == "starting"
+    }; // MutexGuard dropped here
+
+    if should_ping {
+        let client = reqwest::Client::new();
+        match client
+            .get("http://127.0.0.1:9966/health")
+            .timeout(std::time::Duration::from_secs(1))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let mut tts = state.lock().map_err(|e| e.to_string())?;
+                tts.status = "ready".to_string();
+                return Ok("ready".to_string());
+            }
+            _ => return Ok("starting".to_string()),
+        }
+    }
+
+    let tts = state.lock().map_err(|e| e.to_string())?;
+    Ok(tts.status.clone())
+}
+
+#[tauri::command]
+pub async fn tts_speak(
+    state: State<'_, Mutex<TtsState>>,
+    text: String,
+) -> Result<String, String> {
+    {
+        let tts = state.lock().map_err(|e| e.to_string())?;
+        if tts.status != "ready" {
+            return Err("TTS server is not ready".to_string());
+        }
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("http://127.0.0.1:9966/tts")
+        .json(&serde_json::json!({ "text": text }))
+        .timeout(std::time::Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| format!("TTS request failed: {}", e))?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    if !status.is_success() {
+        let error_msg = body["error"]
+            .as_str()
+            .unwrap_or("Unknown error");
+        let traceback = body["traceback"]
+            .as_str()
+            .unwrap_or("");
+        if traceback.is_empty() {
+            return Err(format!("TTS server error ({}): {}", status, error_msg));
+        } else {
+            return Err(format!("TTS server error ({}): {}\n\n{}", status, error_msg, traceback));
+        }
+    }
+
+    let audio_b64 = body["audio"]
+        .as_str()
+        .ok_or("No audio field in TTS response")?;
+
+    Ok(format!("data:audio/wav;base64,{}", audio_b64))
+}
+
+#[tauri::command]
+pub async fn tts_save_audio(
+    app: tauri::AppHandle,
+    audio_data_uri: String,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // Strip the data URI prefix to get raw base64
+    let b64 = audio_data_uri
+        .strip_prefix("data:audio/wav;base64,")
+        .unwrap_or(&audio_data_uri);
+
+    let audio_bytes = BASE64
+        .decode(b64)
+        .map_err(|e| format!("Failed to decode audio: {}", e))?;
+
+    // Open native file save dialog
+    let file_path = app
+        .dialog()
+        .file()
+        .add_filter("WAV Audio", &["wav"])
+        .set_file_name("tts_audio.wav")
+        .blocking_save_file();
+
+    match file_path {
+        Some(path) => {
+            let p = path.as_path().ok_or("Invalid save path")?;
+            fs::write(p, &audio_bytes)
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+            Ok(p.to_string_lossy().to_string())
+        }
+        None => Err("Save cancelled".to_string()),
+    }
 }

@@ -134,7 +134,7 @@ export default function HomePage() {
           </select>
           <p className="text-neutral-500 text-sm whitespace-nowrap">
             {filteredAndSorted.length}
-            {search.trim() ? ` / ${comics.length}` : ""} comics
+            {search.trim() ? ` / ${comics.length}` : ""} items
           </p>
         </div>
       )}

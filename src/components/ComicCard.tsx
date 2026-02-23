@@ -9,14 +9,21 @@ interface Props {
   onCoverLoaded: (path: string, base64: string) => void;
 }
 
+const TYPE_BADGE: Record<string, { label: string; color: string }> = {
+  md: { label: "MD", color: "bg-green-600" },
+  txt: { label: "TXT", color: "bg-blue-600" },
+};
+
 export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  // Lazy load cover when card enters viewport and no cached cover
+  const isTextFile = comic.file_type === "md" || comic.file_type === "txt";
+
+  // Lazy load cover when card enters viewport (only for ZIP files)
   useEffect(() => {
-    if (cover || loading) return;
+    if (isTextFile || cover || loading) return;
 
     const el = cardRef.current;
     if (!el) return;
@@ -39,11 +46,18 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [comic.path, cover, loading, onCoverLoaded]);
+  }, [comic.path, comic.file_type, cover, loading, onCoverLoaded, isTextFile]);
 
   function handleClick() {
-    navigate(`/read?path=${encodeURIComponent(comic.path)}`);
+    if (isTextFile) {
+      navigate(`/read-text?path=${encodeURIComponent(comic.path)}`);
+    } else {
+      navigate(`/read?path=${encodeURIComponent(comic.path)}`);
+    }
   }
+
+  // Strip file extension for display
+  const displayName = comic.filename.replace(/\.(zip|md|txt)$/i, "");
 
   return (
     <div
@@ -52,7 +66,33 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
       className="cursor-pointer group rounded-lg overflow-hidden bg-neutral-800 hover:ring-2 hover:ring-blue-500 transition-all"
     >
       <div className="aspect-[2/3] bg-neutral-700 overflow-hidden relative">
-        {cover ? (
+        {isTextFile ? (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-neutral-400">
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+            {TYPE_BADGE[comic.file_type] && (
+              <span
+                className={`px-2 py-0.5 text-xs text-white rounded ${TYPE_BADGE[comic.file_type].color}`}
+              >
+                {TYPE_BADGE[comic.file_type].label}
+              </span>
+            )}
+          </div>
+        ) : cover ? (
           <img
             src={cover}
             alt={comic.filename}
@@ -69,7 +109,7 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
         )}
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-3 opacity-0 group-hover:opacity-100 transition-opacity">
           <p className="text-xs text-white break-words leading-snug">
-            {comic.filename.replace(/\.zip$/i, "")}
+            {displayName}
           </p>
         </div>
       </div>
@@ -78,7 +118,7 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
           className="text-sm text-neutral-200 truncate"
           title={comic.filename}
         >
-          {comic.filename.replace(/\.zip$/i, "")}
+          {displayName}
         </p>
       </div>
     </div>
