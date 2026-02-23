@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+const PRELOAD_AHEAD = 5;
+
 interface PageData {
   src: string | null;
   loading: boolean;
@@ -10,6 +12,7 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
   const [pages, setPages] = useState<PageData[]>([]);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadingRef = useRef<Set<number>>(new Set());
+  const loadedRef = useRef<Set<number>>(new Set());
 
   // Initialize page slots when comic changes
   useEffect(() => {
@@ -24,8 +27,8 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
       }))
     );
     loadingRef.current.clear();
+    loadedRef.current.clear();
 
-    // Cleanup observer on comic change
     return () => {
       observerRef.current?.disconnect();
       observerRef.current = null;
@@ -34,6 +37,8 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
 
   const loadPage = useCallback(
     async (index: number) => {
+      if (index < 0 || index >= totalPages) return;
+      if (loadedRef.current.has(index)) return;
       if (loadingRef.current.has(index)) return;
       loadingRef.current.add(index);
 
@@ -49,6 +54,7 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
           path: comicPath,
           index,
         });
+        loadedRef.current.add(index);
         setPages((prev) => {
           if (index >= prev.length) return prev;
           const next = [...prev];
@@ -67,7 +73,17 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
         loadingRef.current.delete(index);
       }
     },
-    [comicPath]
+    [comicPath, totalPages]
+  );
+
+  // Load a page and preload the next PRELOAD_AHEAD pages
+  const loadWithPreload = useCallback(
+    (index: number) => {
+      for (let i = index; i <= Math.min(index + PRELOAD_AHEAD, totalPages - 1); i++) {
+        loadPage(i);
+      }
+    },
+    [loadPage, totalPages]
   );
 
   const observeElement = useCallback(
@@ -83,13 +99,13 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
                   (entry.target as HTMLElement).dataset.pageIndex
                 );
                 if (!isNaN(pageIndex)) {
-                  loadPage(pageIndex);
+                  loadWithPreload(pageIndex);
                 }
               }
             });
           },
           {
-            rootMargin: "200% 0px",
+            rootMargin: "100% 0px",
           }
         );
       }
@@ -97,7 +113,7 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
       element.dataset.pageIndex = String(index);
       observerRef.current.observe(element);
     },
-    [loadPage]
+    [loadWithPreload]
   );
 
   return { pages, observeElement };
