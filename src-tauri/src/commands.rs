@@ -4,7 +4,7 @@ use natord::compare as natural_compare;
 use serde::Serialize;
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 
 // ---------- Data Types ----------
@@ -78,6 +78,29 @@ fn read_entry_as_base64(
 
 // ---------- Tauri Commands ----------
 
+/// Recursively collect all .zip files under a directory.
+fn collect_zips(dir: &Path, out: &mut Vec<PathBuf>) {
+    let read_dir = match fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in read_dir.flatten() {
+        let file_path = entry.path();
+        if file_path.is_dir() {
+            collect_zips(&file_path, out);
+        } else {
+            let is_zip = file_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("zip"))
+                .unwrap_or(false);
+            if is_zip {
+                out.push(file_path);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
     let dir = Path::new(&path);
@@ -85,26 +108,16 @@ pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
         return Err(format!("Not a directory: {}", path));
     }
 
+    let mut zip_paths: Vec<PathBuf> = Vec::new();
+    collect_zips(dir, &mut zip_paths);
+
     let mut entries: Vec<ComicEntry> = Vec::new();
-    let read_dir = fs::read_dir(dir).map_err(|e| e.to_string())?;
 
-    for entry in read_dir {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let file_path = entry.path();
-
-        let is_zip = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("zip"))
-            .unwrap_or(false);
-
-        if !is_zip {
-            continue;
-        }
-
-        let filename = file_path
-            .file_name()
-            .unwrap_or_default()
+    for file_path in zip_paths {
+        // Show path relative to the selected folder, fallback to filename
+        let display_name = file_path
+            .strip_prefix(dir)
+            .unwrap_or(&file_path)
             .to_string_lossy()
             .to_string();
 
@@ -124,7 +137,7 @@ pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
         };
 
         entries.push(ComicEntry {
-            filename,
+            filename: display_name,
             path: file_path.to_string_lossy().to_string(),
             cover_base64,
         });
