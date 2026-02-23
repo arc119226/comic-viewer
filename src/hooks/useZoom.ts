@@ -40,26 +40,27 @@ export function useZoom(containerRef: React.RefObject<HTMLDivElement | null>) {
     [containerRef]
   );
 
-  // Ctrl+Scroll wheel handler
+  // Ctrl+Scroll wheel handler — listen on window to intercept before WebView2
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
     function handleWheel(e: WheelEvent) {
       if (!e.ctrlKey) return;
       e.preventDefault();
       const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
       setZoom((prev) => {
         const newScale = clamp(prev.scale + delta, MIN_ZOOM, MAX_ZOOM);
-        const rect = el!.getBoundingClientRect();
-        const originX = ((e.clientX - rect.left) / rect.width) * 100;
-        const originY = ((e.clientY - rect.top) / rect.height) * 100;
-        return { scale: newScale, originX, originY };
+        const el = containerRef.current;
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const originX = ((e.clientX - rect.left) / rect.width) * 100;
+          const originY = ((e.clientY - rect.top) / rect.height) * 100;
+          return { scale: newScale, originX, originY };
+        }
+        return { ...prev, scale: newScale };
       });
     }
 
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => window.removeEventListener("wheel", handleWheel);
   }, [containerRef]);
 
   // Keyboard shortcuts: Ctrl+0, Ctrl++, Ctrl+-
