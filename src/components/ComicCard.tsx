@@ -5,17 +5,18 @@ import type { ComicEntry } from "../types";
 
 interface Props {
   comic: ComicEntry;
+  cover: string | null;
+  onCoverLoaded: (path: string, base64: string) => void;
 }
 
-export default function ComicCard({ comic }: Props) {
+export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
   const navigate = useNavigate();
-  const [cover, setCover] = useState<string | null>(comic.cover_base64 || null);
   const [loading, setLoading] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  // Lazy load cover when card enters viewport
+  // Lazy load cover when card enters viewport and no cached cover
   useEffect(() => {
-    if (cover) return;
+    if (cover || loading) return;
 
     const el = cardRef.current;
     if (!el) return;
@@ -27,7 +28,7 @@ export default function ComicCard({ comic }: Props) {
           setLoading(true);
           invoke<string>("get_cover", { path: comic.path })
             .then((base64) => {
-              if (base64) setCover(base64);
+              if (base64) onCoverLoaded(comic.path, base64);
             })
             .catch((err) => console.error("Failed to load cover:", err))
             .finally(() => setLoading(false));
@@ -38,7 +39,7 @@ export default function ComicCard({ comic }: Props) {
 
     observer.observe(el);
     return () => observer.disconnect();
-  }, [comic.path, cover]);
+  }, [comic.path, cover, loading, onCoverLoaded]);
 
   function handleClick() {
     navigate(`/read?path=${encodeURIComponent(comic.path)}`);

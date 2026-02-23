@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useLastFolder } from "../hooks/useLastFolder";
@@ -17,14 +17,20 @@ export default function HomePage() {
   const [scanning, setScanning] = useState(false);
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortOption>("name-asc");
+  const [coverCache, setCoverCache] = useState<Record<string, string>>({});
   const { getLastFolder, setLastFolder } = useLastFolder();
+
+  // Track version to invalidate cache when folder changes
+  const folderVersion = useRef(0);
 
   const loadFolder = useCallback(
     async (path: string) => {
+      folderVersion.current += 1;
       setScanning(true);
       setFolderPath(path);
       setLastFolder(path);
       setComics([]);
+      setCoverCache({});
       setSearch("");
       try {
         const entries = await invoke<ComicEntry[]>("scan_folder", { path });
@@ -52,6 +58,10 @@ export default function HomePage() {
       loadFolder(selected as string);
     }
   }
+
+  const onCoverLoaded = useCallback((path: string, base64: string) => {
+    setCoverCache((prev) => ({ ...prev, [path]: base64 }));
+  }, []);
 
   const filteredAndSorted = useMemo(() => {
     let result = comics;
@@ -129,7 +139,11 @@ export default function HomePage() {
         </div>
       )}
 
-      <ComicGrid comics={filteredAndSorted} />
+      <ComicGrid
+        comics={filteredAndSorted}
+        coverCache={coverCache}
+        onCoverLoaded={onCoverLoaded}
+      />
     </div>
   );
 }
