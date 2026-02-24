@@ -223,6 +223,7 @@ except Exception:
 
 # ---------------------------------------------------------------------------
 
+import asyncio
 import base64
 import io
 
@@ -233,6 +234,32 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 chat = None
 _spk_emb = None  # Female speaker embedding, generated once at model load
+
+# ---------------------------------------------------------------------------
+# Edge TTS support
+# ---------------------------------------------------------------------------
+
+# Default Edge TTS voice (Traditional Chinese female)
+_EDGE_TTS_VOICE = "zh-TW-HsiaoChenNeural"
+
+
+def _edge_tts_synthesize(text: str, voice: str = _EDGE_TTS_VOICE) -> bytes:
+    """Synthesize text to MP3 bytes using edge-tts (Microsoft Edge free TTS)."""
+    import edge_tts
+
+    async def _run():
+        communicate = edge_tts.Communicate(text, voice)
+        chunks = []
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                chunks.append(chunk["data"])
+        return b"".join(chunks)
+
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_run())
+    finally:
+        loop.close()
 
 # Maximum characters per TTS chunk. ChatTTS works best with short segments;
 # longer inputs are split at sentence boundaries and inferred separately.
@@ -360,10 +387,20 @@ def test_voice():
 def tts():
     data = request.get_json(silent=True) or {}
     text = data.get("text", "").strip()
+    engine = data.get("engine", "chattts")  # "chattts" or "edge-tts"
     if not text:
         return jsonify({"error": "No text provided"}), 400
 
     try:
+        # ---- Edge TTS (cloud-based, fast, no model needed) ----
+        if engine == "edge-tts":
+            voice = data.get("voice", _EDGE_TTS_VOICE)
+            print(f"[TTS] Edge TTS: {len(text)} chars, voice={voice}", flush=True)
+            mp3_bytes = _edge_tts_synthesize(text, voice)
+            audio_b64 = base64.b64encode(mp3_bytes).decode("utf-8")
+            return jsonify({"audio": audio_b64, "format": "mp3"})
+
+        # ---- ChatTTS (local model, offline) ----
         import wave
 
         import ChatTTS as ChatTTSModule
@@ -373,7 +410,7 @@ def tts():
 
         # Split long text into manageable chunks for faster, more reliable inference
         chunks = _split_text(text)
-        print(f"[TTS] Inferring {len(chunks)} chunk(s), total {len(text)} chars",
+        print(f"[TTS] ChatTTS: {len(chunks)} chunk(s), total {len(text)} chars",
               flush=True)
 
         # Build inference params with female voice
@@ -421,12 +458,13 @@ def tts():
 
 
 if __name__ == "__main__":
-    print("Loading ChatTTS model...", flush=True)
+    print("TTS server starting...", flush=True)
+    print("  ChatTTS: model will load on first use", flush=True)
     try:
-        get_chat()
-        print("ChatTTS model loaded. Server ready.", flush=True)
-    except Exception as e:
-        print(f"Warning: Failed to preload ChatTTS model: {e}", flush=True)
-        print("Server will attempt to load model on first request.", flush=True)
+        import edge_tts  # noqa: F401
+        print("  Edge TTS: available", flush=True)
+    except ImportError:
+        print("  Edge TTS: not installed (pip install edge-tts)", flush=True)
+    print(f"  Listening on http://127.0.0.1:9966", flush=True)
 
     app.run(host="127.0.0.1", port=9966)

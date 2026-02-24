@@ -10,7 +10,7 @@ import TopBar from "../components/TopBar";
 import TtsStatusIndicator from "../components/TtsStatusIndicator";
 import TtsFloatingButton from "../components/TtsFloatingButton";
 import TtsAudioPlayer from "../components/TtsAudioPlayer";
-import type { TextInfo } from "../types";
+import type { TextInfo, TtsEngine } from "../types";
 
 export default function TextReaderPage() {
   const [searchParams] = useSearchParams();
@@ -89,7 +89,19 @@ export default function TextReaderPage() {
         title={textInfo.filename.replace(/\.(md|txt)$/i, "")}
         onBack={() => navigate("/")}
         rightContent={
-          <TtsStatusIndicator status={tts.status} onClick={handleTtsToggle} />
+          <div className="flex items-center gap-2">
+            {tts.status === "ready" && (
+              <select
+                value={tts.engine}
+                onChange={(e) => tts.setEngine(e.target.value as TtsEngine)}
+                className="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-2 py-1 focus:outline-none focus:border-neutral-500"
+              >
+                <option value="edge-tts">Edge TTS</option>
+                <option value="chattts">ChatTTS</option>
+              </select>
+            )}
+            <TtsStatusIndicator status={tts.status} onClick={handleTtsToggle} />
+          </div>
         }
       />
 
@@ -138,6 +150,7 @@ export default function TextReaderPage() {
         <TtsFloatingButton
           x={selection.x}
           y={selection.y}
+          position={selection.position}
           loading={tts.isSpeaking}
           onClick={handleSpeak}
         />

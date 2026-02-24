@@ -1,11 +1,18 @@
 interface Props {
   x: number;
   y: number;
+  position: "above" | "below";
   loading: boolean;
   onClick: () => void;
 }
 
-export default function TtsFloatingButton({ x, y, loading, onClick }: Props) {
+export default function TtsFloatingButton({
+  x,
+  y,
+  position,
+  loading,
+  onClick,
+}: Props) {
   return (
     <button
       onMouseDown={(e) => {
@@ -19,7 +26,7 @@ export default function TtsFloatingButton({ x, y, loading, onClick }: Props) {
         onClick();
       }}
       disabled={loading}
-      className="fixed z-50 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm rounded-full shadow-lg transition-colors -translate-x-1/2 -translate-y-full"
+      className={`fixed z-50 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white text-sm rounded-full shadow-lg transition-colors -translate-x-1/2 ${position === "above" ? "-translate-y-full" : ""}`}
       style={{ left: x, top: y }}
     >
       {loading ? (

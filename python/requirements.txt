@@ -4,3 +4,4 @@ requests
 torch
 torchaudio
 numpy
+edge-tts

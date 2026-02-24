@@ -335,6 +335,7 @@ pub async fn tts_status(state: State<'_, Mutex<TtsState>>) -> Result<String, Str
 pub async fn tts_speak(
     state: State<'_, Mutex<TtsState>>,
     text: String,
+    engine: Option<String>,
 ) -> Result<String, String> {
     {
         let tts = state.lock().map_err(|e| e.to_string())?;
@@ -343,10 +344,12 @@ pub async fn tts_speak(
         }
     }
 
+    let engine_name = engine.unwrap_or_else(|| "chattts".to_string());
+
     let client = reqwest::Client::new();
     let resp = client
         .post("http://127.0.0.1:9966/tts")
-        .json(&serde_json::json!({ "text": text }))
+        .json(&serde_json::json!({ "text": text, "engine": engine_name }))
         .timeout(std::time::Duration::from_secs(300))
         .send()
         .await
@@ -373,7 +376,16 @@ pub async fn tts_speak(
         .as_str()
         .ok_or("No audio field in TTS response")?;
 
-    Ok(format!("data:audio/wav;base64,{}", audio_b64))
+    let format = body["format"]
+        .as_str()
+        .unwrap_or("wav");
+
+    let mime = match format {
+        "mp3" => "audio/mpeg",
+        _ => "audio/wav",
+    };
+
+    Ok(format!("data:{};base64,{}", mime, audio_b64))
 }
 
 #[tauri::command]
@@ -383,10 +395,14 @@ pub async fn tts_save_audio(
 ) -> Result<String, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    // Strip the data URI prefix to get raw base64
-    let b64 = audio_data_uri
-        .strip_prefix("data:audio/wav;base64,")
-        .unwrap_or(&audio_data_uri);
+    // Detect format from data URI prefix and strip it
+    let (b64, ext, filter_name) = if audio_data_uri.starts_with("data:audio/mpeg;base64,") {
+        (&audio_data_uri["data:audio/mpeg;base64,".len()..], "mp3", "MP3 Audio")
+    } else if audio_data_uri.starts_with("data:audio/wav;base64,") {
+        (&audio_data_uri["data:audio/wav;base64,".len()..], "wav", "WAV Audio")
+    } else {
+        (audio_data_uri.as_str(), "wav", "WAV Audio")
+    };
 
     let audio_bytes = BASE64
         .decode(b64)
@@ -396,8 +412,8 @@ pub async fn tts_save_audio(
     let file_path = app
         .dialog()
         .file()
-        .add_filter("WAV Audio", &["wav"])
-        .set_file_name("tts_audio.wav")
+        .add_filter(filter_name, &[ext])
+        .set_file_name(&format!("tts_audio.{}", ext))
         .blocking_save_file();
 
     match file_path {

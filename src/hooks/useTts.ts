@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { TtsStatus } from "../types";
+import type { TtsStatus, TtsEngine } from "../types";
 
 export function useTts() {
   const [status, setStatus] = useState<TtsStatus>("stopped");
@@ -8,6 +8,7 @@ export function useTts() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastAudioDataUri, setLastAudioDataUri] = useState<string | null>(null);
+  const [engine, setEngine] = useState<TtsEngine>("edge-tts");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -62,7 +63,7 @@ export function useTts() {
     setError(null);
     try {
       console.log("[TTS] Sending speak request, text length:", text.length);
-      const audioDataUri = await invoke<string>("tts_speak", { text });
+      const audioDataUri = await invoke<string>("tts_speak", { text, engine });
       console.log(
         "[TTS] Got audio response, data URI length:",
         audioDataUri.length,
@@ -98,7 +99,7 @@ export function useTts() {
     } finally {
       setIsSpeaking(false);
     }
-  }, []);
+  }, [engine]);
 
   const stopAudio = useCallback(() => {
     if (audioRef.current) {
@@ -148,6 +149,8 @@ export function useTts() {
     isPlaying,
     error,
     lastAudioDataUri,
+    engine,
+    setEngine,
     startServer,
     stopServer,
     speak,

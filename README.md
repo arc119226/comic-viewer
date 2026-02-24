@@ -22,7 +22,8 @@ Browse local folders of ZIP comic files and text files (.md, .txt) with thumbnai
 - **Markdown rendering** - Full GitHub Flavored Markdown support (headings, tables, code blocks, etc.)
 - **Adjustable font size** - Increase/decrease font size with persistence across sessions
 - **Text-to-speech** - Select text and click the floating button to hear it read aloud
-- **Save audio** - Save generated speech as `.wav` files via native save dialog
+- **Dual TTS engines** - Choose between Edge TTS (cloud, fast, no model download) and ChatTTS (local, customizable voice) via dropdown
+- **Save audio** - Save generated speech as `.mp3` or `.wav` files via native save dialog
 - **Voice tuning** - Web UI for testing different voice seeds and parameters
 
 ### General
@@ -38,7 +39,7 @@ Browse local folders of ZIP comic files and text files (.md, .txt) with thumbnai
 | Backend  | Tauri v2 (Rust)                   |
 | Build    | Vite 7                            |
 | IPC      | Tauri invoke / command            |
-| TTS      | ChatTTS (Python sidecar)          |
+| TTS      | ChatTTS + Edge TTS (Python sidecar) |
 
 ## Prerequisites
 
@@ -64,9 +65,39 @@ npm run tauri dev
 npm run tauri build
 ```
 
+## Build & Package
+
+To build the production installer:
+
+```bash
+npm run tauri build
+```
+
+This compiles the Rust backend in release mode, builds the React frontend, and packages everything into installers.
+
+### Output (Windows)
+
+| File | Location | Description |
+|------|----------|-------------|
+| **NSIS Installer** | `src-tauri/target/release/bundle/nsis/Comic Viewer_0.1.0_x64-setup.exe` | Recommended for distribution. Includes WebView2 bootstrapper. |
+| **MSI Installer** | `src-tauri/target/release/bundle/msi/Comic Viewer_0.1.0_x64_en-US.msi` | Alternative installer format. |
+| **Standalone EXE** | `src-tauri/target/release/comic-viewer.exe` | Not a proper installer. Requires [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) pre-installed. |
+
+> **Note:** The NSIS `.exe` setup file is the easiest way to distribute — just send the file and double-click to install. WebView2 is automatically installed if not present.
+
+### TTS is not bundled
+
+The Python TTS server is **not** included in the packaged installer. To use TTS on the target machine:
+
+- **Edge TTS** (recommended): Only needs `pip install edge-tts` — lightweight, cloud-based, no model download
+- **ChatTTS**: Needs full Python environment with `pip install -r python/requirements.txt` + ~1.5GB model auto-download on first run
+
 ## TTS Setup (Optional)
 
-Text-to-speech uses [ChatTTS](https://github.com/2noise/ChatTTS), a high-quality Chinese/English speech synthesis model.
+Two TTS engines are available:
+
+- **Edge TTS** — Cloud-based Microsoft TTS. Fast, no model download, supports many voices. Requires internet connection.
+- **[ChatTTS](https://github.com/2noise/ChatTTS)** — Local high-quality Chinese/English speech synthesis. Customizable voice parameters. Requires ~1.5GB model download on first use.
 
 ### 1. Install Python dependencies
 
@@ -77,21 +108,24 @@ pip install -r requirements.txt
 
 > **Python version:** 3.11 ~ 3.13 recommended. Python 3.14 also works - `tts_server.py` includes automatic compatibility patches for newer Python/library versions.
 
-### 2. First run (model download)
+> **Edge TTS only?** If you only want Edge TTS (no ChatTTS), you can just install: `pip install flask edge-tts`
+
+### 2. First run
 
 ```bash
 python tts_server.py
 ```
 
-On first run, ChatTTS will automatically download model files (~1.5GB) to `python/asset/`. This only happens once. After download, the server starts on `http://127.0.0.1:9966`.
+The server starts on `http://127.0.0.1:9966`. Edge TTS works immediately. ChatTTS will automatically download model files (~1.5GB) to `python/asset/` on first use.
 
 ### 3. Use TTS in the app
 
 1. Open a text file (.md / .txt) in the viewer
 2. Click the speaker icon in the top bar to start the TTS server
-3. Select any text with your mouse
-4. Click the floating "Read Aloud" button that appears
-5. Use the bottom audio player to play/pause/stop/save
+3. Choose your TTS engine from the dropdown (Edge TTS or ChatTTS)
+4. Select any text with your mouse
+5. Click the floating "Read Aloud" button that appears
+6. Use the bottom audio player to play/pause/stop/save
 
 ### 4. Voice tuning (Optional)
 
@@ -147,7 +181,7 @@ comic-viewer/
 │   ├── Cargo.toml
 │   └── tauri.conf.json
 ├── python/                       # TTS sidecar (optional)
-│   ├── tts_server.py             # ChatTTS HTTP server (with compat patches)
+│   ├── tts_server.py             # ChatTTS + Edge TTS HTTP server (with compat patches)
 │   ├── tts_webui.py              # Voice tuning Web UI
 │   └── requirements.txt          # Python dependencies
 ├── index.html
@@ -165,8 +199,8 @@ comic-viewer/
 | `load_page`      | Loads a single page by index as base64           |
 | `load_text_file` | Reads a text file and returns its content        |
 | `get_text_info`  | Returns metadata for a text file                 |
-| `tts_start`      | Starts the ChatTTS Python server                 |
-| `tts_stop`       | Stops the ChatTTS Python server                  |
+| `tts_start`      | Starts the TTS Python server                     |
+| `tts_stop`       | Stops the TTS Python server                      |
 | `tts_status`     | Returns TTS server status                        |
 | `tts_speak`      | Converts text to speech, returns base64 audio    |
 | `tts_save_audio` | Saves audio to file via native save dialog       |
