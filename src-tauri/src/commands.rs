@@ -253,29 +253,36 @@ pub async fn tts_start(
         return Ok("already running".to_string());
     }
 
-    // Try multiple locations for tts_server.py
-    let candidates = vec![
-        // Dev mode: CWD is src-tauri/, so go up one level
-        PathBuf::from("../python/tts_server.py"),
-        // If CWD is project root
-        PathBuf::from("python/tts_server.py"),
-        // Resource dir (production bundle)
-        app.path()
-            .resource_dir()
-            .ok()
-            .map(|d| d.join("python").join("tts_server.py"))
-            .unwrap_or_default(),
-    ];
+    // Strategy 1: Try bundled tts_server.exe (production build)
+    let bundled_exe = app
+        .path()
+        .resolve("bin/tts_server.exe", tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.exists());
 
-    let script_path = candidates
-        .into_iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| "Cannot find python/tts_server.py".to_string())?;
-
-    let child = Command::new("python")
-        .arg(script_path.to_string_lossy().to_string())
-        .spawn()
-        .map_err(|e| format!("Failed to start TTS server: {}", e))?;
+    let child = if let Some(exe_path) = bundled_exe {
+        // Launch bundled standalone exe — no Python needed
+        Command::new(exe_path)
+            .spawn()
+            .map_err(|e| format!("Failed to start bundled TTS server: {}", e))?
+    } else {
+        // Strategy 2: Fall back to Python script (dev mode)
+        let candidates = vec![
+            PathBuf::from("../python/tts_server.py"),
+            PathBuf::from("python/tts_server.py"),
+        ];
+        let script_path = candidates
+            .into_iter()
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                "Cannot find TTS server. No bundled exe and no python/tts_server.py found."
+                    .to_string()
+            })?;
+        Command::new("python")
+            .arg(script_path.to_string_lossy().to_string())
+            .spawn()
+            .map_err(|e| format!("Failed to start TTS server: {}", e))?
+    };
 
     tts.process = Some(child);
     tts.status = "starting".to_string();

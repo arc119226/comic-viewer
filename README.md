@@ -67,13 +67,27 @@ npm run tauri build
 
 ## Build & Package
 
-To build the production installer:
+### Step 1: Build the TTS server exe
+
+The production installer bundles a standalone TTS server (Edge TTS only, ~14MB). Build it first:
+
+```bash
+cd python
+pip install -r requirements-edge.txt pyinstaller
+pyinstaller tts_server.spec
+cp dist/tts_server.exe ../src-tauri/bin/tts_server.exe
+cd ..
+```
+
+> **Note:** `src-tauri/bin/tts_server.exe` must exist before running `tauri build`. The exe is not committed to git — build it locally.
+
+### Step 2: Build the installer
 
 ```bash
 npm run tauri build
 ```
 
-This compiles the Rust backend in release mode, builds the React frontend, and packages everything into installers.
+This compiles the Rust backend, builds the React frontend, bundles `tts_server.exe`, and packages everything into installers.
 
 ### Output (Windows)
 
@@ -85,12 +99,11 @@ This compiles the Rust backend in release mode, builds the React frontend, and p
 
 > **Note:** The NSIS `.exe` setup file is the easiest way to distribute — just send the file and double-click to install. WebView2 is automatically installed if not present.
 
-### TTS is not bundled
+### Bundled TTS
 
-The Python TTS server is **not** included in the packaged installer. To use TTS on the target machine:
+The packaged installer includes a standalone Edge TTS server — **no Python installation required** on the target machine. Edge TTS uses Microsoft's cloud service (requires internet).
 
-- **Edge TTS** (recommended): Only needs `pip install edge-tts` — lightweight, cloud-based, no model download
-- **ChatTTS**: Needs full Python environment with `pip install -r python/requirements.txt` + ~1.5GB model auto-download on first run
+For ChatTTS (local, offline), users need to install Python separately with `pip install -r python/requirements.txt`.
 
 ## TTS Setup (Optional)
 

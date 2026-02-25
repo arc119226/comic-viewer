@@ -1,12 +1,14 @@
 """
-ChatTTS HTTP server for Comic Viewer TTS integration.
+TTS HTTP server for Comic Viewer (Edge TTS + optional ChatTTS).
 
 Endpoints:
-  GET  /health  - Health check
-  POST /tts     - Convert text to speech, returns base64 WAV audio
+  GET  /health      - Health check
+  POST /tts         - Convert text to speech (engine: "edge-tts" or "chattts")
+  POST /test_voice  - Test ChatTTS voice seeds (requires ChatTTS)
 
 Usage:
-  pip install -r requirements.txt
+  pip install -r requirements.txt   # Full install (ChatTTS + Edge TTS)
+  pip install flask edge-tts         # Edge TTS only (lightweight)
   python tts_server.py
 """
 
@@ -222,6 +224,18 @@ except Exception:
     pass
 
 # ---------------------------------------------------------------------------
+# Detect ChatTTS availability
+# ---------------------------------------------------------------------------
+
+_CHATTTS_AVAILABLE = False
+try:
+    import ChatTTS as _test_chattts
+    _CHATTTS_AVAILABLE = True
+    del _test_chattts
+except ImportError:
+    pass
+
+# ---------------------------------------------------------------------------
 
 import asyncio
 import base64
@@ -349,6 +363,9 @@ def health():
 @app.route("/test_voice", methods=["POST"])
 def test_voice():
     """Test different voice seeds. POST {"seed": 3333, "text": "..."}"""
+    if not _CHATTTS_AVAILABLE:
+        return jsonify({"error": "ChatTTS is not available in this build"}), 400
+
     import wave
 
     import ChatTTS as ChatTTSModule
@@ -401,6 +418,12 @@ def tts():
             return jsonify({"audio": audio_b64, "format": "mp3"})
 
         # ---- ChatTTS (local model, offline) ----
+        if not _CHATTTS_AVAILABLE:
+            return jsonify({
+                "error": "ChatTTS is not available. Use Edge TTS, "
+                         "or install Python + requirements.txt for ChatTTS."
+            }), 400
+
         import wave
 
         import ChatTTS as ChatTTSModule
@@ -459,7 +482,10 @@ def tts():
 
 if __name__ == "__main__":
     print("TTS server starting...", flush=True)
-    print("  ChatTTS: model will load on first use", flush=True)
+    if _CHATTTS_AVAILABLE:
+        print("  ChatTTS: available (model loads on first use)", flush=True)
+    else:
+        print("  ChatTTS: not installed (Edge TTS only mode)", flush=True)
     try:
         import edge_tts  # noqa: F401
         print("  Edge TTS: available", flush=True)

@@ -36,6 +36,14 @@ src-tauri/asset/
 # Claude Code workspace
 .claude/
 
+# PyInstaller build artifacts
+python/build/
+python/dist/
+python/.build-venv/
+
+# Bundled TTS exe (built via PyInstaller, not committed)
+src-tauri/bin/
+
 # Temp build helper scripts
 build_check.bat
 build_release.bat

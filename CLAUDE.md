@@ -9,12 +9,23 @@ Desktop comic and novel viewer: Tauri v2 (Rust backend) + React 19 + TypeScript 
 ```bash
 npm install              # Install frontend dependencies
 npm run tauri dev        # Development mode with hot-reload
-npm run tauri build      # Production build
+npm run tauri build      # Production build (requires tts_server.exe, see below)
 npx tsc --noEmit         # TypeScript type check only
 npx vite build           # Frontend build only
 ```
 
 **Windows note:** Rust compilation requires MSVC environment. Run from "Developer Command Prompt for VS 2022" or set LIB/INCLUDE env vars pointing to MSVC + Windows SDK paths.
+
+### Building the TTS Server Exe (for bundled release)
+
+```bash
+cd python
+pip install -r requirements-edge.txt pyinstaller
+pyinstaller tts_server.spec
+cp dist/tts_server.exe ../src-tauri/bin/tts_server.exe
+```
+
+The exe must exist at `src-tauri/bin/tts_server.exe` before running `npm run tauri build`. It bundles Edge TTS only (~14MB). ChatTTS is not included (torch is too large). The exe is gitignored.
 
 ### TTS Setup (Optional)
 
@@ -70,9 +81,12 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 - `src/hooks/useZoom.ts` — Zoom state management (Ctrl+scroll on window, keyboard shortcuts)
 - `src/hooks/useTts.ts` — TTS server lifecycle, audio playback, and save management
 - `src/hooks/useTextSelection.ts` — Mouse text selection detection for TTS
-- `python/tts_server.py` — Flask HTTP server wrapping ChatTTS (with compat patches + voice config)
+- `python/tts_server.py` — Flask HTTP server with Edge TTS + ChatTTS (compat patches + voice config)
+- `python/tts_server.spec` — PyInstaller spec for building standalone Edge TTS server exe
+- `python/requirements-edge.txt` — Minimal Python deps for Edge TTS only (flask + edge-tts)
 - `python/tts_webui.py` — Voice tuning Web UI for testing seeds and parameters
-- `src-tauri/tauri.conf.json` — Tauri app configuration (zoomHotkeysEnabled: false to prevent WebView2 intercepting Ctrl+scroll)
+- `src-tauri/tauri.conf.json` — Tauri app configuration (zoomHotkeysEnabled: false, bundle resources)
+- `src-tauri/bin/tts_server.exe` — Built TTS server exe (gitignored, built via PyInstaller)
 
 ## Code Conventions
 
