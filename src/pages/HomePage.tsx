@@ -44,6 +44,13 @@ export default function HomePage() {
     [setLastFolder]
   );
 
+  // Save scroll position on unmount so we can restore it on return
+  useEffect(() => {
+    return () => {
+      sessionStorage.setItem("homeScrollY", String(window.scrollY));
+    };
+  }, []);
+
   // Auto-load last folder on mount
   useEffect(() => {
     const last = getLastFolder();
@@ -51,6 +58,19 @@ export default function HomePage() {
       loadFolder(last);
     }
   }, []);
+
+  // Restore scroll position after comics finish loading
+  useEffect(() => {
+    if (comics.length > 0 && !scanning) {
+      const saved = sessionStorage.getItem("homeScrollY");
+      if (saved) {
+        requestAnimationFrame(() => {
+          window.scrollTo(0, parseInt(saved, 10));
+        });
+        sessionStorage.removeItem("homeScrollY");
+      }
+    }
+  }, [comics, scanning]);
 
   async function handleSelectFolder() {
     const selected = await open({ directory: true, recursive: false });
