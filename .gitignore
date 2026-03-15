@@ -33,6 +33,11 @@ __pycache__/
 python/asset/
 src-tauri/asset/
 
+# Index-TTS (cloned repo with its own venv)
+python/index-tts/
+python/checkpoints/
+python/voices/*.wav
+
 # Claude Code workspace
 .claude/
 

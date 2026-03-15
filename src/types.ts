@@ -19,4 +19,4 @@ export interface TextInfo {
 
 export type TtsStatus = "stopped" | "starting" | "ready" | "error";
 
-export type TtsEngine = "chattts" | "edge-tts";
+export type TtsEngine = "chattts" | "edge-tts" | "index-tts";

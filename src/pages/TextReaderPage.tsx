@@ -91,14 +91,28 @@ export default function TextReaderPage() {
         rightContent={
           <div className="flex items-center gap-2">
             {tts.status === "ready" && (
-              <select
-                value={tts.engine}
-                onChange={(e) => tts.setEngine(e.target.value as TtsEngine)}
-                className="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-2 py-1 focus:outline-none focus:border-neutral-500"
-              >
-                <option value="edge-tts">Edge TTS</option>
-                <option value="chattts">ChatTTS</option>
-              </select>
+              <>
+                <select
+                  value={tts.engine}
+                  onChange={(e) => tts.setEngine(e.target.value as TtsEngine)}
+                  className="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-2 py-1 focus:outline-none focus:border-neutral-500"
+                >
+                  <option value="edge-tts">Edge TTS</option>
+                  <option value="chattts">ChatTTS</option>
+                  <option value="index-tts">Index TTS</option>
+                </select>
+                {tts.engine === "index-tts" && (
+                  <button
+                    onClick={tts.pickVoice}
+                    className="text-xs bg-neutral-800 text-neutral-300 border border-neutral-700 rounded px-2 py-1 hover:bg-neutral-700 transition-colors truncate max-w-[120px]"
+                    title={tts.voicePath || "Select reference voice WAV"}
+                  >
+                    {tts.voicePath
+                      ? tts.voicePath.split(/[/\\]/).pop()
+                      : "Pick voice..."}
+                  </button>
+                )}
+              </>
             )}
             <TtsStatusIndicator status={tts.status} onClick={handleTtsToggle} />
           </div>

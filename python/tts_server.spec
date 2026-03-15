@@ -40,8 +40,9 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # Exclude ChatTTS and heavy ML dependencies (not needed for Edge TTS)
+        # Exclude ChatTTS, Index-TTS and heavy ML dependencies (not needed for Edge TTS)
         "ChatTTS",
+        "indextts",
         "torch",
         "torchaudio",
         "numpy",

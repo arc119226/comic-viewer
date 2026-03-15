@@ -253,35 +253,34 @@ pub async fn tts_start(
         return Ok("already running".to_string());
     }
 
-    // Strategy 1: Try bundled tts_server.exe (production build)
-    let bundled_exe = app
-        .path()
-        .resolve("bin/tts_server.exe", tauri::path::BaseDirectory::Resource)
-        .ok()
-        .filter(|p| p.exists());
+    // Strategy 1 (dev mode): Prefer Python script for full ChatTTS + Edge TTS support
+    let python_script = vec![
+        PathBuf::from("../python/tts_server.py"),
+        PathBuf::from("python/tts_server.py"),
+    ]
+    .into_iter()
+    .find(|p| p.exists());
 
-    let child = if let Some(exe_path) = bundled_exe {
-        // Launch bundled standalone exe — no Python needed
-        Command::new(exe_path)
-            .spawn()
-            .map_err(|e| format!("Failed to start bundled TTS server: {}", e))?
-    } else {
-        // Strategy 2: Fall back to Python script (dev mode)
-        let candidates = vec![
-            PathBuf::from("../python/tts_server.py"),
-            PathBuf::from("python/tts_server.py"),
-        ];
-        let script_path = candidates
-            .into_iter()
-            .find(|p| p.exists())
-            .ok_or_else(|| {
-                "Cannot find TTS server. No bundled exe and no python/tts_server.py found."
-                    .to_string()
-            })?;
+    let child = if let Some(script_path) = python_script {
+        // Launch via Python — supports ChatTTS + Edge TTS
         Command::new("python")
             .arg(script_path.to_string_lossy().to_string())
             .spawn()
             .map_err(|e| format!("Failed to start TTS server: {}", e))?
+    } else {
+        // Strategy 2 (production): Use bundled tts_server.exe (Edge TTS only)
+        let exe_path = app
+            .path()
+            .resolve("bin/tts_server.exe", tauri::path::BaseDirectory::Resource)
+            .ok()
+            .filter(|p| p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
+            .ok_or_else(|| {
+                "Cannot find TTS server. No python/tts_server.py and no bundled exe found."
+                    .to_string()
+            })?;
+        Command::new(exe_path)
+            .spawn()
+            .map_err(|e| format!("Failed to start bundled TTS server: {}", e))?
     };
 
     tts.process = Some(child);
@@ -343,6 +342,7 @@ pub async fn tts_speak(
     state: State<'_, Mutex<TtsState>>,
     text: String,
     engine: Option<String>,
+    voice_path: Option<String>,
 ) -> Result<String, String> {
     {
         let tts = state.lock().map_err(|e| e.to_string())?;
@@ -353,10 +353,15 @@ pub async fn tts_speak(
 
     let engine_name = engine.unwrap_or_else(|| "chattts".to_string());
 
+    let mut payload = serde_json::json!({ "text": text, "engine": engine_name });
+    if let Some(vp) = voice_path {
+        payload["voice_path"] = serde_json::Value::String(vp);
+    }
+
     let client = reqwest::Client::new();
     let resp = client
         .post("http://127.0.0.1:9966/tts")
-        .json(&serde_json::json!({ "text": text, "engine": engine_name }))
+        .json(&payload)
         .timeout(std::time::Duration::from_secs(300))
         .send()
         .await

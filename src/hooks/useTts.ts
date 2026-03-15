@@ -9,6 +9,7 @@ export function useTts() {
   const [error, setError] = useState<string | null>(null);
   const [lastAudioDataUri, setLastAudioDataUri] = useState<string | null>(null);
   const [engine, setEngine] = useState<TtsEngine>("edge-tts");
+  const [voicePath, setVoicePath] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -58,12 +59,27 @@ export function useTts() {
     setIsPlaying(false);
   }, []);
 
+  const pickVoice = useCallback(async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      filters: [{ name: "WAV Audio", extensions: ["wav"] }],
+      multiple: false,
+    });
+    if (selected) {
+      setVoicePath(selected as string);
+    }
+  }, []);
+
   const speak = useCallback(async (text: string) => {
     setIsSpeaking(true);
     setError(null);
     try {
       console.log("[TTS] Sending speak request, text length:", text.length);
-      const audioDataUri = await invoke<string>("tts_speak", { text, engine });
+      const audioDataUri = await invoke<string>("tts_speak", {
+        text,
+        engine,
+        voicePath: engine === "index-tts" ? voicePath : undefined,
+      });
       console.log(
         "[TTS] Got audio response, data URI length:",
         audioDataUri.length,
@@ -99,7 +115,7 @@ export function useTts() {
     } finally {
       setIsSpeaking(false);
     }
-  }, [engine]);
+  }, [engine, voicePath]);
 
   const stopAudio = useCallback(() => {
     if (audioRef.current) {
@@ -151,6 +167,8 @@ export function useTts() {
     lastAudioDataUri,
     engine,
     setEngine,
+    voicePath,
+    pickVoice,
     startServer,
     stopServer,
     speak,

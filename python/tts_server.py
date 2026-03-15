@@ -236,6 +236,14 @@ except ImportError:
     pass
 
 # ---------------------------------------------------------------------------
+# Detect Index-TTS availability (runs in separate venv via subprocess)
+# ---------------------------------------------------------------------------
+
+_INDEXTTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index-tts")
+_INDEXTTS_VENV_PYTHON = os.path.join(_INDEXTTS_DIR, ".venv", "Scripts", "python.exe")
+_INDEXTTS_AVAILABLE = os.path.isfile(_INDEXTTS_VENV_PYTHON)
+
+# ---------------------------------------------------------------------------
 
 import asyncio
 import base64
@@ -277,7 +285,7 @@ def _edge_tts_synthesize(text: str, voice: str = _EDGE_TTS_VOICE) -> bytes:
 
 # Maximum characters per TTS chunk. ChatTTS works best with short segments;
 # longer inputs are split at sentence boundaries and inferred separately.
-_TTS_CHUNK_MAX = 200
+_TTS_CHUNK_MAX = 100
 
 # Female voice seed (known good female voice)
 _VOICE_SEED = 5098
@@ -292,7 +300,9 @@ def get_chat():
 
         use_gpu = torch.cuda.is_available()
         chat = ChatTTS.Chat()
-        chat.load(compile=use_gpu)  # torch.compile only effective on CUDA
+        # compile=False: torch.compile requires Triton which is not available on Windows
+        # source='huggingface': rvcmd (default downloader) crashes on Windows
+        chat.load(compile=False, source="huggingface")
 
         if use_gpu:
             print(f"[TTS] Using GPU: {torch.cuda.get_device_name(0)}", flush=True)
@@ -305,6 +315,34 @@ def get_chat():
         print(f"[TTS] Female voice loaded (seed {_VOICE_SEED})", flush=True)
 
     return chat
+
+
+# ---------------------------------------------------------------------------
+# Index-TTS subprocess helper (runs in its own venv to avoid dep conflicts)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_VOICE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voices", "default.wav")
+
+
+def _indextts_infer(text: str, voice_path: str, output_path: str) -> None:
+    """Run Index-TTS inference via subprocess in its own venv."""
+    import subprocess
+
+    script = (
+        "import sys; "
+        "from indextts.infer import IndexTTS; "
+        "tts = IndexTTS(model_dir='checkpoints'); "
+        f"tts.infer(audio_prompt=sys.argv[1], text=sys.argv[2], output_path=sys.argv[3])"
+    )
+    result = subprocess.run(
+        [_INDEXTTS_VENV_PYTHON, "-c", script, voice_path, text, output_path],
+        cwd=_INDEXTTS_DIR,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Index-TTS failed: {result.stderr[-500:] if result.stderr else 'unknown error'}")
 
 
 def _split_text(text: str, max_len: int = _TTS_CHUNK_MAX) -> list[str]:
@@ -404,7 +442,7 @@ def test_voice():
 def tts():
     data = request.get_json(silent=True) or {}
     text = data.get("text", "").strip()
-    engine = data.get("engine", "chattts")  # "chattts" or "edge-tts"
+    engine = data.get("engine", "chattts")  # "chattts", "edge-tts", or "index-tts"
     if not text:
         return jsonify({"error": "No text provided"}), 400
 
@@ -416,6 +454,39 @@ def tts():
             mp3_bytes = _edge_tts_synthesize(text, voice)
             audio_b64 = base64.b64encode(mp3_bytes).decode("utf-8")
             return jsonify({"audio": audio_b64, "format": "mp3"})
+
+        # ---- Index-TTS (local voice cloning, runs in separate venv) ----
+        if engine == "index-tts":
+            if not _INDEXTTS_AVAILABLE:
+                return jsonify({
+                    "error": "Index-TTS is not available. "
+                             "Set up with: cd python && git clone https://github.com/index-tts/index-tts.git "
+                             "&& cd index-tts && uv sync --all-extras"
+                }), 400
+
+            import tempfile
+
+            voice_path = data.get("voice_path", _DEFAULT_VOICE_PATH)
+            if not os.path.isfile(voice_path):
+                return jsonify({
+                    "error": f"Voice reference file not found: {voice_path}. "
+                             f"Place a WAV file at {_DEFAULT_VOICE_PATH} or pick one in the UI."
+                }), 400
+
+            print(f"[TTS] Index-TTS: {len(text)} chars, voice={os.path.basename(voice_path)}",
+                  flush=True)
+
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+            os.close(tmp_fd)
+            try:
+                _indextts_infer(text, voice_path, tmp_path)
+                with open(tmp_path, "rb") as f:
+                    wav_bytes = f.read()
+                audio_b64 = base64.b64encode(wav_bytes).decode("utf-8")
+                return jsonify({"audio": audio_b64, "format": "wav"})
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
 
         # ---- ChatTTS (local model, offline) ----
         if not _CHATTTS_AVAILABLE:
@@ -431,6 +502,15 @@ def tts():
 
         chat_instance = get_chat()
 
+        # Clean text for ChatTTS: remove characters it can't handle
+        text = re.sub(r"\r\n?", "\n", text)          # normalize line endings
+        text = text.replace("\u3000", " ")             # full-width space → normal space
+        text = re.sub(r"[^\S ]+", " ", text)           # collapse whitespace to space
+        text = re.sub(r"[""''「」『』【】]", "", text)  # remove fancy quotes/brackets
+        text = re.sub(r"[a-zA-Z0-9]+", lambda m: " " + m.group() + " ", text)  # pad alphanumeric
+        text = re.sub(r"([。！？!?]){2,}", r"\1", text)  # deduplicate ending punctuation
+        text = re.sub(r"\s+", " ", text).strip()       # collapse multiple spaces
+
         # Split long text into manageable chunks for faster, more reliable inference
         chunks = _split_text(text)
         print(f"[TTS] ChatTTS: {len(chunks)} chunk(s), total {len(text)} chars",
@@ -445,19 +525,31 @@ def tts():
             prompt="[speed_5]",
         )
 
-        # Batch infer all chunks at once for better throughput
-        # Note: do NOT skip refine_text — it handles Chinese prosody and pronunciation
+        # Infer one chunk at a time with retry to avoid batch failures
         print(f"[TTS]   chunks: {[len(c) for c in chunks]} chars each", flush=True)
-        wavs = chat_instance.infer(
-            chunks,
-            params_infer_code=params,
-        )
-
         all_pcm: list[np.ndarray] = []
-        for i, wav in enumerate(wavs):
-            audio_data = np.clip(wav, -1.0, 1.0)
+        max_retries = 3
+        for ci, chunk in enumerate(chunks):
+            wav_ok = None
+            for attempt in range(max_retries):
+                result = chat_instance.infer(
+                    [chunk],
+                    params_infer_code=params,
+                )
+                if result and len(result) > 0 and result[0] is not None and len(result[0]) > 0:
+                    wav_ok = result[0]
+                    break
+                print(f"[TTS]   chunk {ci} attempt {attempt+1}/{max_retries} failed, retrying...",
+                      flush=True)
+            if wav_ok is None:
+                print(f"[TTS]   chunk {ci} skipped after {max_retries} retries", flush=True)
+                continue
+            audio_data = np.clip(wav_ok, -1.0, 1.0)
             pcm16 = (audio_data * 32767).astype(np.int16)
             all_pcm.append(pcm16)
+
+        if not all_pcm:
+            return jsonify({"error": "ChatTTS failed to generate audio for all chunks"}), 500
 
         # Concatenate all chunks
         combined = np.concatenate(all_pcm) if len(all_pcm) > 1 else all_pcm[0]
@@ -491,6 +583,10 @@ if __name__ == "__main__":
         print("  Edge TTS: available", flush=True)
     except ImportError:
         print("  Edge TTS: not installed (pip install edge-tts)", flush=True)
+    if _INDEXTTS_AVAILABLE:
+        print(f"  Index-TTS: available (venv at {_INDEXTTS_DIR})", flush=True)
+    else:
+        print(f"  Index-TTS: not found (expected venv at {_INDEXTTS_DIR})", flush=True)
     print(f"  Listening on http://127.0.0.1:9966", flush=True)
 
     app.run(host="127.0.0.1", port=9966)

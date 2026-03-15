@@ -6,7 +6,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:tts": "cd python && python -m PyInstaller tts_server.spec && cp dist/tts_server.exe ../src-tauri/bin/tts_server.exe",
+    "build:all": "npm run build:tts && npm run tauri build"
   },
   "repository": {
     "type": "git",

@@ -8,8 +8,10 @@ Desktop comic and novel viewer: Tauri v2 (Rust backend) + React 19 + TypeScript 
 
 ```bash
 npm install              # Install frontend dependencies
-npm run tauri dev        # Development mode with hot-reload
-npm run tauri build      # Production build (requires tts_server.exe, see below)
+npm run tauri dev        # Development mode with hot-reload (auto-creates placeholder exe)
+npm run build:tts        # Build TTS server exe (requires Python deps, see below)
+npm run build:all        # One-step production build (build:tts + tauri build)
+npm run tauri build      # Production build (requires tts_server.exe already built)
 npx tsc --noEmit         # TypeScript type check only
 npx vite build           # Frontend build only
 ```
@@ -19,13 +21,18 @@ npx vite build           # Frontend build only
 ### Building the TTS Server Exe (for bundled release)
 
 ```bash
+pip install -r python/requirements-edge.txt pyinstaller   # One-time setup
+npm run build:tts                                          # Build + copy exe
+```
+
+Or manually:
+```bash
 cd python
-pip install -r requirements-edge.txt pyinstaller
 python -m PyInstaller tts_server.spec
 cp dist/tts_server.exe ../src-tauri/bin/tts_server.exe
 ```
 
-The exe must exist at `src-tauri/bin/tts_server.exe` before running `npm run tauri build`. It bundles Edge TTS only (~14MB). ChatTTS is not included (torch is too large). The exe is gitignored.
+The exe bundles Edge TTS only (~14MB). ChatTTS is not included (torch is too large). The exe is gitignored. In dev mode (`npm run tauri dev`), `build.rs` auto-creates a placeholder exe so the build never fails — TTS runs from Python directly in dev.
 
 ### TTS Setup (Optional)
 
@@ -38,6 +45,19 @@ python tts_server.py               # Starts on http://127.0.0.1:9966
 **Recommended Python version:** 3.11 ~ 3.13. Python 3.14 works but requires auto-patches (see below).
 
 Model files (~1.5GB) are auto-downloaded to `python/asset/` on first run. This directory is gitignored.
+
+### Index-TTS Setup (Optional)
+
+Index-TTS is a high-quality zero-shot voice cloning TTS by Bilibili. Requires CUDA GPU. Runs in its own venv (separate from ChatTTS) to avoid dependency conflicts.
+
+```bash
+cd python
+git clone https://github.com/index-tts/index-tts.git   # Clone repo
+cd index-tts
+uv sync --all-extras                                     # Create venv with deps
+```
+
+The server auto-detects `python/index-tts/.venv/Scripts/python.exe`. Place a reference voice WAV (5-10s, clear speech) at `python/voices/default.wav`, or pick one in the UI. The `index-tts/` directory is gitignored.
 
 ### Voice Tuning WebUI
 
