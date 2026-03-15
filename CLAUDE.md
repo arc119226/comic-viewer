@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Desktop comic and novel viewer: Tauri v2 (Rust backend) + React 19 + TypeScript + Tailwind CSS v4 + Vite. Supports ZIP comics and text files (.md, .txt) with optional ChatTTS text-to-speech.
+Desktop comic and novel viewer: Tauri v2 (Rust backend) + React 19 + TypeScript + Tailwind CSS v4 + Vite. Supports ZIP comics and text files (.md, .txt) with optional TTS (Edge TTS, ChatTTS, Index-TTS).
 
 ## Build & Run
 
@@ -44,20 +44,26 @@ python tts_server.py               # Starts on http://127.0.0.1:9966
 
 **Recommended Python version:** 3.11 ~ 3.13. Python 3.14 works but requires auto-patches (see below).
 
+**Key dependency versions for ChatTTS:**
+- `transformers==4.52.1` (v4.x series — ChatTTS is not compatible with transformers v5)
+- `huggingface-hub<1.0,>=0.30.0` (required by transformers 4.x)
+- `torch 2.10+cu128` (CUDA GPU acceleration, install via `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128`)
+
 Model files (~1.5GB) are auto-downloaded to `python/asset/` on first run. This directory is gitignored.
 
 ### Index-TTS Setup (Optional)
 
-Index-TTS is a high-quality zero-shot voice cloning TTS by Bilibili. Requires CUDA GPU. Runs in its own venv (separate from ChatTTS) to avoid dependency conflicts.
+Index-TTS is a high-quality zero-shot voice cloning TTS by Bilibili (supports Chinese + English with emotion control). Requires CUDA GPU. Runs in its own venv (separate from ChatTTS) to avoid dependency conflicts (Index-TTS needs transformers v5 + torch 2.8, while ChatTTS needs transformers v4 + torch 2.10).
 
 ```bash
 cd python
-git clone https://github.com/index-tts/index-tts.git   # Clone repo
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/index-tts/index-tts.git
 cd index-tts
 uv sync --all-extras                                     # Create venv with deps
+# Download checkpoints (~GB level) from HuggingFace into python/index-tts/checkpoints/
 ```
 
-The server auto-detects `python/index-tts/.venv/Scripts/python.exe`. Place a reference voice WAV (5-10s, clear speech) at `python/voices/default.wav`, or pick one in the UI. The `index-tts/` directory is gitignored.
+The server auto-detects `python/index-tts/.venv/Scripts/python.exe`. Place a reference voice WAV (5-10s, clear speech) at `python/voices/default.wav`, or pick one in the UI. The `index-tts/` directory and `checkpoints/` are gitignored.
 
 ### Voice Tuning WebUI
 
@@ -72,21 +78,21 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 
 - **Frontend** (`src/`): React SPA with three routes — HomePage (folder browser grid), ReaderPage (comic scroll reader), TextReaderPage (text/markdown reader with TTS)
 - **Backend** (`src-tauri/src/`): Rust commands exposed via Tauri IPC — file scanning, ZIP reading, text file loading, TTS process management, audio file saving
-- **TTS** (`python/`): ChatTTS Python HTTP server on localhost:9966, managed by Rust as a child process
+- **TTS** (`python/`): Flask HTTP server on localhost:9966 supporting Edge TTS (cloud), ChatTTS (local AI), and Index-TTS (voice cloning via subprocess in separate venv), managed by Rust as a child process
 - **IPC**: Frontend calls Rust via `invoke()` from `@tauri-apps/api/core`; data transferred as JSON (images/audio as base64 data URIs)
 - **Cover loading**: Two-phase — `scan_folder` returns file list instantly, `get_cover` loads covers on demand via IntersectionObserver; covers cached in parent state to survive sort/filter changes
 - **TTS lifecycle**: Rust manages Python process via `std::process::Command`, stores `Child` in `Mutex<TtsState>` managed state; communicates via HTTP (reqwest); process killed on window close
 
 ## TTS Compatibility Patches
 
-`tts_server.py` includes auto-patches for Python 3.14 + transformers v5 + latest torchaudio compatibility. These activate automatically on startup when needed:
+`tts_server.py` includes auto-patches for Python 3.14 + latest torchaudio compatibility. These activate automatically on startup when needed:
 
 | Patch | Problem | Fix |
 |-------|---------|-----|
 | **base16384 shim** | `pybase16384` Cython/CFFI backends have no compiled wheels for Python 3.14 | Pure-Python encoder/decoder injected via `sys.modules` |
-| **encode_plus** | `transformers` v5 removed `PreTrainedTokenizerFast.encode_plus()`, ChatTTS still calls it | Compatibility shim calling internal `_encode_plus` |
-| **DynamicCache** | `transformers` v5 `DynamicCache.get_max_cache_shape()` returns `-1` instead of `None`, causing `narrow()` crash | Monkey-patch to return `None` for negative values |
 | **WAV encoding** | Latest `torchaudio.save()` requires `torchcodec` package | Use Python stdlib `wave` module directly |
+
+**Important:** Use `transformers==4.52.1` (v4.x). ChatTTS is incompatible with transformers v5 (removed `encode_plus`, `DynamicCache` behavior changes, etc.). Index-TTS needs transformers v5 but runs in its own isolated venv so there is no conflict.
 
 ## Key Files
 
@@ -101,7 +107,7 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 - `src/hooks/useZoom.ts` — Zoom state management (Ctrl+scroll on window, keyboard shortcuts)
 - `src/hooks/useTts.ts` — TTS server lifecycle, audio playback, and save management
 - `src/hooks/useTextSelection.ts` — Mouse text selection detection for TTS
-- `python/tts_server.py` — Flask HTTP server with Edge TTS + ChatTTS (compat patches + voice config)
+- `python/tts_server.py` — Flask HTTP server with Edge TTS + ChatTTS + Index-TTS (compat patches + voice config)
 - `python/tts_server.spec` — PyInstaller spec for building standalone Edge TTS server exe
 - `python/requirements-edge.txt` — Minimal Python deps for Edge TTS only (flask + edge-tts)
 - `python/tts_webui.py` — Voice tuning Web UI for testing seeds and parameters
@@ -120,4 +126,5 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 
 - **Rust crates**: `zip` (ZIP reading), `natord` (natural sort), `base64` (image encoding), `tauri-plugin-dialog` (folder picker + save dialog), `reqwest` (HTTP client for TTS)
 - **npm packages**: `react-router` (routing), `@tauri-apps/plugin-dialog` (native dialog), `react-markdown` + `remark-gfm` (markdown rendering), `@tailwindcss/typography` (prose styling)
-- **Python packages** (optional): `ChatTTS`, `flask`, `requests`, `torch`, `torchaudio`, `numpy`
+- **Python packages** (optional): `ChatTTS`, `flask`, `requests`, `torch 2.10+cu128`, `torchaudio`, `numpy`, `transformers==4.52.1`, `huggingface-hub<1.0`
+- **Index-TTS** (optional, separate venv): `indextts`, `torch==2.8.*`, `transformers>=5.0` — installed via `uv sync` in `python/index-tts/`
