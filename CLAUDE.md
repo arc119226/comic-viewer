@@ -21,7 +21,7 @@ npx vite build           # Frontend build only
 ```bash
 cd python
 pip install -r requirements-edge.txt pyinstaller
-pyinstaller tts_server.spec
+python -m PyInstaller tts_server.spec
 cp dist/tts_server.exe ../src-tauri/bin/tts_server.exe
 ```
 

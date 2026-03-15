@@ -4,7 +4,7 @@
 Usage:
     cd python
     pip install -r requirements-edge.txt pyinstaller
-    pyinstaller tts_server.spec
+    python -m PyInstaller tts_server.spec
     # Output: dist/tts_server.exe
 """
 
