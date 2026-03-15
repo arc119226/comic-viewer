@@ -46,6 +46,7 @@ python tts_server.py               # Starts on http://127.0.0.1:9966
 
 **Key dependency versions for ChatTTS:**
 - `transformers==4.52.1` (v4.x series — ChatTTS is not compatible with transformers v5)
+- `tokenizers>=0.21,<0.22` (required by transformers 4.52.1; v0.22+ will cause import errors)
 - `huggingface-hub<1.0,>=0.30.0` (required by transformers 4.x)
 - `torch 2.10+cu128` (CUDA GPU acceleration, install via `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128`)
 
@@ -63,7 +64,9 @@ uv sync --all-extras                                     # Create venv with deps
 # Download checkpoints (~GB level) from HuggingFace into python/index-tts/checkpoints/
 ```
 
-The server auto-detects `python/index-tts/.venv/Scripts/python.exe`. Place a reference voice WAV (5-10s, clear speech) at `python/voices/default.wav`, or pick one in the UI. The `index-tts/` directory and `checkpoints/` are gitignored.
+The server auto-detects `python/index-tts/.venv/Scripts/python.exe` and probe-tests it at startup. Place a reference voice WAV (5-10s, clear speech) at `python/voices/default.wav`, or pick one in the UI. The `index-tts/` directory and `checkpoints/` are gitignored.
+
+**MSIX Python note:** If `uv` was installed via an MSIX-packaged app (e.g. Claude Desktop), Python is stored inside a sandboxed path (`AppData\Local\Packages\{id}\LocalCache\Roaming\...`). The pyvenv.cfg `home` path (`AppData\Roaming\...`) is an app-execution alias that may fail with `WinError 2` from Tauri/Rust child processes. The server auto-resolves this via `os.path.realpath()` and MSIX package scanning, then probe-tests each candidate with `python -c "import sys"` to find the working interpreter.
 
 ### Voice Tuning WebUI
 
@@ -91,6 +94,10 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 |-------|---------|-----|
 | **base16384 shim** | `pybase16384` Cython/CFFI backends have no compiled wheels for Python 3.14 | Pure-Python encoder/decoder injected via `sys.modules` |
 | **WAV encoding** | Latest `torchaudio.save()` requires `torchcodec` package | Use Python stdlib `wave` module directly |
+| **DynamicCache.layers** | ChatTTS accesses `cache.layers` which doesn't exist in transformers 4.52.x | `__init__` wrapper + `__getattr__` fallback add `.layers` as alias for `key_cache` |
+| **DynamicCache.get_max_cache_shape** | Signature mismatch + returns -1 instead of None for unlimited | Wrapper normalizes args and converts -1 → None |
+| **DynamicCache.get_max_length** | ChatTTS uses deprecated `get_max_length()` fallback | Provided via `__getattr__` returning `lambda: None` |
+| **MSIX Python alias** | uv-installed Python via MSIX app uses app-execution alias that fails from Tauri subprocess | Multi-strategy resolver (realpath + MSIX package scan) with startup probe-test |
 
 **Important:** Use `transformers==4.52.1` (v4.x). ChatTTS is incompatible with transformers v5 (removed `encode_plus`, `DynamicCache` behavior changes, etc.). Index-TTS needs transformers v5 but runs in its own isolated venv so there is no conflict.
 

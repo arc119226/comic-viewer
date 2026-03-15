@@ -114,6 +114,9 @@ def _install_pybase16384_shim():
     ).decode()
     mod.encode_string = lambda s: _b14_encode_to_string(s.encode())
     mod.decode_string = lambda s: _b14_decode_from_string(s).decode()
+    # Remove any leftover sub-modules from a failed real import attempt
+    for key in [k for k in sys.modules if k.startswith("pybase16384")]:
+        del sys.modules[key]
     sys.modules["pybase16384"] = mod
 
 
@@ -201,27 +204,90 @@ except Exception:
     pass
 
 # ---------------------------------------------------------------------------
-# DynamicCache compatibility patch
+# DynamicCache compatibility patches
 #
-# In transformers v5, DynamicCache.get_max_cache_shape() returns -1 to mean
-# "unlimited". ChatTTS expects None (the v4 convention from get_max_length()).
-# The -1 gets passed as a length to torch.Tensor.narrow(), causing a crash.
+# ChatTTS's GPT model (gpt.py) was written against a newer transformers API.
+# transformers 4.52.1's DynamicCache may lack some attributes/behaviors:
+#
+# 1. get_max_cache_shape() signature changed: the original takes only (self),
+#    but ChatTTS passes extra args. Also it returns -1 meaning "unlimited" in
+#    some versions — ChatTTS expects None. We normalize the signature and value.
+#
+# 2. ChatTTS accesses cache.layers (a list of per-layer cache entries) which
+#    doesn't exist in transformers 4.52.x. We add it as an alias for key_cache
+#    via both __init__ wrapper and __getattr__ fallback.
+#
+# 3. ChatTTS uses get_max_length() as a deprecated fallback, which also doesn't
+#    exist. We provide it via __getattr__.
 # ---------------------------------------------------------------------------
 
-try:
-    from transformers.cache_utils import DynamicCache
+def _patch_dynamic_cache():
+    """Patch DynamicCache for ChatTTS compatibility.
 
-    _orig_get_max_cache_shape = DynamicCache.get_max_cache_shape
+    1. get_max_cache_shape() returns -1 in some versions meaning "unlimited".
+       ChatTTS expects None (the v4 convention). The -1 gets passed as a length
+       to torch.Tensor.narrow(), causing a crash.
 
-    def _patched_get_max_cache_shape(self, layer_idx=0):
-        val = _orig_get_max_cache_shape(self, layer_idx)
-        return None if val is not None and val < 0 else val
+    2. ChatTTS accesses cache.layers (a list of per-layer cache entries) which
+       doesn't exist in transformers 4.52.x. We add it via both:
+       - A __init__ wrapper that sets self.layers = self.key_cache
+       - A __getattr__ fallback for cases where __init__ is bypassed
+    """
+    try:
+        from transformers.cache_utils import DynamicCache, Cache
 
-    DynamicCache.get_max_cache_shape = _patched_get_max_cache_shape
-    print("[TTS] Patched DynamicCache.get_max_cache_shape for transformers v5",
-          flush=True)
-except Exception:
-    pass
+        # Patch 1: get_max_cache_shape -1 → None
+        if not getattr(DynamicCache.get_max_cache_shape, "_patched", False):
+            _orig = DynamicCache.get_max_cache_shape
+
+            def _patched_get_max_cache_shape(self, *args, **kwargs):
+                try:
+                    val = _orig(self)
+                except TypeError:
+                    val = None
+                return None if val is not None and val < 0 else val
+
+            _patched_get_max_cache_shape._patched = True
+            DynamicCache.get_max_cache_shape = _patched_get_max_cache_shape
+
+        # Patch 2a: Wrap DynamicCache.__init__ to set self.layers
+        if not getattr(DynamicCache.__init__, "_layers_patched", False):
+            _orig_init = DynamicCache.__init__
+
+            def _patched_init(self, *args, **kwargs):
+                _orig_init(self, *args, **kwargs)
+                self.layers = self.key_cache
+
+            _patched_init._layers_patched = True
+            DynamicCache.__init__ = _patched_init
+
+        # Patch 2b: Also add __getattr__ fallback on Cache base class.
+        # This catches cases where DynamicCache is instantiated without
+        # calling __init__ (e.g. via __new__ + manual setup).
+        if not getattr(Cache, "_layers_getattr_patched", False):
+            _orig_getattr = getattr(Cache, "__getattr__", None)
+
+            def _cache_getattr(self, name):
+                if name == "layers":
+                    return self.key_cache
+                if name == "get_max_length":
+                    # Deprecated alias used by older ChatTTS code as fallback
+                    return lambda: None
+                if _orig_getattr is not None:
+                    return _orig_getattr(self, name)
+                raise AttributeError(
+                    f"'{type(self).__name__}' object has no attribute '{name}'"
+                )
+
+            Cache.__getattr__ = _cache_getattr
+            Cache._layers_getattr_patched = True
+
+        return True
+    except Exception:
+        return False
+
+if _patch_dynamic_cache():
+    print("[TTS] Patched DynamicCache for ChatTTS compatibility", flush=True)
 
 # ---------------------------------------------------------------------------
 # Detect ChatTTS availability
@@ -241,7 +307,102 @@ except ImportError:
 
 _INDEXTTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index-tts")
 _INDEXTTS_VENV_PYTHON = os.path.join(_INDEXTTS_DIR, ".venv", "Scripts", "python.exe")
-_INDEXTTS_AVAILABLE = os.path.isfile(_INDEXTTS_VENV_PYTHON)
+
+# uv-created venvs use a trampoline shim; the pyvenv.cfg `home` key points
+# to the real interpreter.  On Windows the `home` path may be an app-execution
+# alias (reparse point into an MSIX sandbox) that fails under certain parent
+# processes (e.g. Tauri/Rust child process).  We build a list of candidate
+# Python paths, probe-test each at startup, and use the first one that works.
+import subprocess as _sp
+
+def _resolve_venv_pythons(venv_dir: str, venv_python: str) -> list[str]:
+    """Return candidate Python interpreter paths (best-first) for a uv venv.
+
+    On Windows, uv installed via MSIX apps (e.g. Claude Desktop) stores Python
+    at ``AppData\\Roaming\\uv\\...`` which is actually an app-execution alias
+    redirecting to ``AppData\\Local\\Packages\\{id}\\LocalCache\\Roaming\\uv\\...``.
+    Both os.path.realpath() and the uv trampoline may fail to resolve this alias
+    when running as a child of Tauri/Rust.  We try multiple resolution strategies
+    and probe-test each candidate to find one that actually works.
+    """
+    candidates: list[str] = []
+    cfg = os.path.join(venv_dir, "pyvenv.cfg")
+    home = None
+    try:
+        with open(cfg, encoding="utf-8-sig") as f:
+            for line in f:
+                parts = line.split("=", 1)
+                if len(parts) == 2 and parts[0].strip() == "home":
+                    home = parts[1].strip()
+                    break
+    except FileNotFoundError:
+        print(f"  [resolve] pyvenv.cfg not found: {cfg}", flush=True)
+
+    if home:
+        real = os.path.join(home, "python.exe")
+        print(f"  [resolve] pyvenv.cfg home={home}", flush=True)
+
+        # Strategy 1: os.path.realpath() may resolve MSIX alias
+        resolved = os.path.realpath(real)
+        if resolved != real:
+            print(f"  [resolve] realpath  ={resolved}", flush=True)
+            candidates.append(resolved)
+
+        # Strategy 2: Manually resolve MSIX AppData\Roaming → LocalCache\Roaming
+        # MSIX apps redirect AppData\Roaming to
+        # AppData\Local\Packages\{PackageFamilyName}\LocalCache\Roaming
+        roaming = os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+        if real.startswith(roaming + os.sep):
+            local_pkgs = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Packages")
+            if os.path.isdir(local_pkgs):
+                rel = real[len(roaming):]  # e.g. \uv\python\...\python.exe
+                try:
+                    for pkg in os.listdir(local_pkgs):
+                        msix_path = os.path.join(
+                            local_pkgs, pkg, "LocalCache", "Roaming"
+                        ) + rel
+                        if os.path.isfile(msix_path) and msix_path not in candidates:
+                            print(f"  [resolve] MSIX found={msix_path}", flush=True)
+                            candidates.append(msix_path)
+                except OSError:
+                    pass
+
+        # Strategy 3: the pyvenv.cfg path itself (may be an alias but worth trying)
+        if real not in candidates:
+            candidates.append(real)
+
+    # Strategy 4: venv shim (uv trampoline — real exe but may also fail if it
+    # internally resolves to the same broken alias path)
+    if venv_python not in candidates:
+        candidates.append(venv_python)
+
+    return candidates
+
+
+def _probe_python(candidates: list[str]) -> str | None:
+    """Probe-test candidates and return the first one that actually works."""
+    for py in candidates:
+        try:
+            r = _sp.run(
+                [py, "-c", "import sys; print(sys.version_info[:2])"],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+            )
+            if r.returncode == 0:
+                print(f"  [resolve] probe OK : {py}", flush=True)
+                return py
+            print(f"  [resolve] probe rc={r.returncode}: {py}", flush=True)
+        except OSError as e:
+            print(f"  [resolve] probe ERR: {py} -> {e}", flush=True)
+        except _sp.TimeoutExpired:
+            print(f"  [resolve] probe timeout: {py}", flush=True)
+    return None
+
+
+_INDEXTTS_VENV_DIR = os.path.join(_INDEXTTS_DIR, ".venv")
+_INDEXTTS_PYTHON_CANDIDATES = _resolve_venv_pythons(_INDEXTTS_VENV_DIR, _INDEXTTS_VENV_PYTHON)
+_INDEXTTS_VERIFIED_PYTHON = _probe_python(_INDEXTTS_PYTHON_CANDIDATES)
+_INDEXTTS_AVAILABLE = _INDEXTTS_VERIFIED_PYTHON is not None
 
 # ---------------------------------------------------------------------------
 
@@ -325,24 +486,47 @@ _DEFAULT_VOICE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "
 
 
 def _indextts_infer(text: str, voice_path: str, output_path: str) -> None:
-    """Run Index-TTS inference via subprocess in its own venv."""
-    import subprocess
+    """Run Index-TTS inference via subprocess in its own venv.
 
-    script = (
-        "import sys; "
-        "from indextts.infer import IndexTTS; "
-        "tts = IndexTTS(model_dir='checkpoints'); "
-        f"tts.infer(audio_prompt=sys.argv[1], text=sys.argv[2], output_path=sys.argv[3])"
-    )
-    result = subprocess.run(
-        [_INDEXTTS_VENV_PYTHON, "-c", script, voice_path, text, output_path],
+    Uses the probe-verified Python interpreter found at startup.
+    """
+    # Ensure the helper Python script exists
+    helper_py = os.path.join(_INDEXTTS_DIR, "_run_infer.py")
+    if not os.path.isfile(helper_py):
+        with open(helper_py, "w", encoding="utf-8") as f:
+            f.write(
+                "import sys, os\n"
+                f"os.chdir(r'{_INDEXTTS_DIR}')\n"
+                "from indextts.infer import IndexTTS\n"
+                "tts = IndexTTS(model_dir='checkpoints', cfg_path='checkpoints/config.yaml')\n"
+                "tts.infer(audio_prompt=sys.argv[1], text=sys.argv[2], output_path=sys.argv[3])\n"
+            )
+
+    site_pkgs = os.path.join(_INDEXTTS_VENV_DIR, "Lib", "site-packages")
+    env = os.environ.copy()
+    # Remove Python env vars that could conflict with the venv's Python 3.10
+    for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE",
+                "_MEIPASS", "_MEIPASS2", "_PYI_SPLASH_IPC"):
+        env.pop(key, None)
+    env["PYTHONPATH"] = site_pkgs
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    python_exe = _INDEXTTS_VERIFIED_PYTHON
+    print(f"[TTS] Index-TTS subprocess: python={python_exe}", flush=True)
+    result = _sp.run(
+        [python_exe, helper_py, voice_path, text, output_path],
         cwd=_INDEXTTS_DIR,
         capture_output=True,
         text=True,
         timeout=600,
+        env=env,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Index-TTS failed: {result.stderr[-500:] if result.stderr else 'unknown error'}")
+        raise RuntimeError(
+            f"Index-TTS failed: {result.stderr[-500:] if result.stderr else 'unknown error'}"
+        )
 
 
 def _split_text(text: str, max_len: int = _TTS_CHUNK_MAX) -> list[str]:
@@ -534,6 +718,7 @@ def tts():
             for attempt in range(max_retries):
                 result = chat_instance.infer(
                     [chunk],
+                    skip_refine_text=True,
                     params_infer_code=params,
                 )
                 if result and len(result) > 0 and result[0] is not None and len(result[0]) > 0:
@@ -585,6 +770,7 @@ if __name__ == "__main__":
         print("  Edge TTS: not installed (pip install edge-tts)", flush=True)
     if _INDEXTTS_AVAILABLE:
         print(f"  Index-TTS: available (venv at {_INDEXTTS_DIR})", flush=True)
+        print(f"  Index-TTS python: {_INDEXTTS_VERIFIED_PYTHON}", flush=True)
     else:
         print(f"  Index-TTS: not found (expected venv at {_INDEXTTS_DIR})", flush=True)
     print(f"  Listening on http://127.0.0.1:9966", flush=True)
