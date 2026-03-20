@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { invoke } from "@tauri-apps/api/core";
 import type { ComicEntry } from "../types";
@@ -17,36 +17,21 @@ const TYPE_BADGE: Record<string, { label: string; color: string }> = {
 export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const cardRef = useRef<HTMLDivElement>(null);
 
   const isTextFile = comic.file_type === "md" || comic.file_type === "txt";
 
-  // Lazy load cover when card enters viewport (only for ZIP files)
+  // Load cover on mount — virtualizer only mounts cards near the viewport
   useEffect(() => {
     if (isTextFile || cover || loading) return;
 
-    const el = cardRef.current;
-    if (!el) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          observer.disconnect();
-          setLoading(true);
-          invoke<string>("get_cover", { path: comic.path })
-            .then((base64) => {
-              if (base64) onCoverLoaded(comic.path, base64);
-            })
-            .catch((err) => console.error("Failed to load cover:", err))
-            .finally(() => setLoading(false));
-        }
-      },
-      { rootMargin: "200px 0px" }
-    );
-
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [comic.path, comic.file_type, cover, loading, onCoverLoaded, isTextFile]);
+    setLoading(true);
+    invoke<string>("get_cover", { path: comic.path })
+      .then((base64) => {
+        if (base64) onCoverLoaded(comic.path, base64);
+      })
+      .catch((err) => console.error("Failed to load cover:", err))
+      .finally(() => setLoading(false));
+  }, [comic.path, comic.file_type, cover, isTextFile]);
 
   function handleClick() {
     if (isTextFile) {
@@ -61,7 +46,6 @@ export default function ComicCard({ comic, cover, onCoverLoaded }: Props) {
 
   return (
     <div
-      ref={cardRef}
       onClick={handleClick}
       className="cursor-pointer group rounded-lg overflow-hidden bg-neutral-800 hover:ring-2 hover:ring-blue-500 transition-all"
     >

@@ -83,7 +83,9 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 - **Backend** (`src-tauri/src/`): Rust commands exposed via Tauri IPC — file scanning, ZIP reading, text file loading, TTS process management, audio file saving
 - **TTS** (`python/`): Flask HTTP server on localhost:9966 supporting Edge TTS (cloud), ChatTTS (local AI), and Index-TTS (voice cloning via subprocess in separate venv), managed by Rust as a child process
 - **IPC**: Frontend calls Rust via `invoke()` from `@tauri-apps/api/core`; data transferred as JSON (images/audio as base64 data URIs)
-- **Cover loading**: Two-phase — `scan_folder` returns file list instantly, `get_cover` loads covers on demand via IntersectionObserver; covers cached in parent state to survive sort/filter changes
+- **Cover loading**: Two-phase — `scan_folder` returns file list instantly, `get_cover` loads covers on demand via virtual scroll (only visible cards mount and trigger loading). Two-level cache: L1 in-memory HashMap (SHA256 → data URI) for same-session hits, L2 persistent disk cache (`app_cache_dir/covers/{sha256}.{ext}` with raw image bytes) for cross-session hits. Cache key is SHA256 of first 8KB of ZIP (content-addressed — survives file rename/move)
+- **HomePage keep-alive**: HomePage stays mounted (hidden via `display:none`) when navigating to readers, preserving all state (covers, scroll position, search, sort) without re-fetching
+- **Virtual scrolling**: ComicGrid uses `@tanstack/react-virtual` to only render visible rows (~30-50 cards), handling 1000+ comics efficiently
 - **TTS lifecycle**: Rust manages Python process via `std::process::Command`, stores `Child` in `Mutex<TtsState>` managed state; communicates via HTTP (reqwest); process killed on window close
 
 ## TTS Compatibility Patches
@@ -103,14 +105,16 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 
 ## Key Files
 
-- `src-tauri/src/commands.rs` — All Rust backend logic (file scanning, ZIP reading, text loading, TTS management, audio saving)
-- `src/pages/HomePage.tsx` — Folder browser with search, sort, cover cache management
+- `src-tauri/src/commands.rs` — All Rust backend logic (file scanning, ZIP reading, text loading, TTS management, audio saving, persistent cover cache with SHA256 content-addressing)
+- `src/App.tsx` — Router with keep-alive layout (HomePage stays mounted, hidden via display:none when in reader)
+- `src/pages/HomePage.tsx` — Folder browser with search, sort, cover cache management (flex layout for virtual scroll)
 - `src/pages/ReaderPage.tsx` — Comic reader with scroll, lazy load, zoom
 - `src/pages/TextReaderPage.tsx` — Text/markdown reader with font size controls and TTS
-- `src/components/ComicCard.tsx` — Cover card with lazy loading + text file icon variant
+- `src/components/ComicGrid.tsx` — Virtual scrolling grid using @tanstack/react-virtual (renders only visible rows)
+- `src/components/ComicCard.tsx` — Cover card with on-mount loading (virtualizer controls visibility) + text file icon variant
 - `src/components/TtsAudioPlayer.tsx` — Audio playback controls with save button
 - `src/components/TtsFloatingButton.tsx` — Floating "read aloud" button on text selection
-- `src/hooks/useLazyLoad.ts` — IntersectionObserver-based lazy loading for reader pages
+- `src/hooks/useLazyLoad.ts` — IntersectionObserver-based lazy loading for comic reader pages
 - `src/hooks/useZoom.ts` — Zoom state management (Ctrl+scroll on window, keyboard shortcuts)
 - `src/hooks/useTts.ts` — TTS server lifecycle, audio playback, and save management
 - `src/hooks/useTextSelection.ts` — Mouse text selection detection for TTS
@@ -126,12 +130,12 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 - Rust: snake_case, async commands, `Result<T, String>` for error handling
 - TypeScript: strict mode, functional components, custom hooks for logic
 - Styling: Tailwind CSS v4 utility classes + @tailwindcss/typography, dark theme (neutral-900 base)
-- Routing: react-router with query params (`/read?path=...` for comics, `/read-text?path=...` for text)
-- State: Cover cache lifted to HomePage, TTS state managed in Rust via Mutex
+- Routing: react-router with query params (`/read?path=...` for comics, `/read-text?path=...` for text); HomePage uses keep-alive pattern (always mounted, hidden when in reader)
+- State: Cover cache lifted to HomePage (frontend) + two-level Rust cache (memory HashMap + disk files keyed by SHA256); TTS state managed in Rust via Mutex
 
 ## Dependencies
 
-- **Rust crates**: `zip` (ZIP reading), `natord` (natural sort), `base64` (image encoding), `tauri-plugin-dialog` (folder picker + save dialog), `reqwest` (HTTP client for TTS)
-- **npm packages**: `react-router` (routing), `@tauri-apps/plugin-dialog` (native dialog), `react-markdown` + `remark-gfm` (markdown rendering), `@tailwindcss/typography` (prose styling)
+- **Rust crates**: `zip` (ZIP reading), `natord` (natural sort), `base64` (image encoding), `sha2` (SHA256 for cover cache keys), `tauri-plugin-dialog` (folder picker + save dialog), `reqwest` (HTTP client for TTS)
+- **npm packages**: `react-router` (routing), `@tauri-apps/plugin-dialog` (native dialog), `react-markdown` + `remark-gfm` (markdown rendering), `@tailwindcss/typography` (prose styling), `@tanstack/react-virtual` (virtual scrolling for comic grid)
 - **Python packages** (optional): `ChatTTS`, `flask`, `requests`, `torch 2.10+cu128`, `torchaudio`, `numpy`, `transformers==4.52.1`, `huggingface-hub<1.0`
 - **Index-TTS** (optional, separate venv): `indextts`, `torch==2.8.*`, `transformers>=5.0` — installed via `uv sync` in `python/index-tts/`

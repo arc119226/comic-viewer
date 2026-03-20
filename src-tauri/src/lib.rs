@@ -2,7 +2,7 @@ mod commands;
 
 use commands::{
     get_comic_info, get_cover, get_text_info, load_page, load_text_file, scan_folder,
-    tts_save_audio, tts_speak, tts_start, tts_status, tts_stop, TtsState,
+    tts_save_audio, tts_speak, tts_start, tts_status, tts_stop, CoverCache, TtsState,
 };
 use std::sync::Mutex;
 use tauri::Manager;
@@ -12,6 +12,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Mutex::new(TtsState::default()))
+        .manage(Mutex::new(CoverCache::default()))
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             get_cover,

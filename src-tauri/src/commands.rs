@@ -2,6 +2,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use natord::compare as natural_compare;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -32,6 +34,86 @@ pub struct TextInfo {
     pub file_type: String,
     pub char_count: usize,
     pub line_count: usize,
+}
+
+// ---------- Cover Cache ----------
+
+pub struct CoverCache {
+    /// In-memory L1 cache: SHA256 hex → data URI string
+    pub memory: HashMap<String, String>,
+}
+
+impl Default for CoverCache {
+    fn default() -> Self {
+        CoverCache {
+            memory: HashMap::new(),
+        }
+    }
+}
+
+const COVER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp"];
+
+/// Compute SHA256 of the first 8KB of a file (fast content-based cache key).
+fn compute_file_hash(path: &str) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 8192];
+    let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+    let hash = Sha256::digest(&buf[..n]);
+    Ok(format!("{:x}", hash))
+}
+
+/// Look for a cached cover file on disk: {cache_dir}/covers/{hash}.{ext}
+fn find_cached_cover(cache_dir: &Path, hash: &str) -> Option<PathBuf> {
+    let covers_dir = cache_dir.join("covers");
+    for ext in COVER_EXTENSIONS {
+        let p = covers_dir.join(format!("{}.{}", hash, ext));
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Read a cached cover file from disk and return as data URI.
+fn read_cover_from_disk(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let name = path.to_string_lossy();
+    let mime = mime_for_filename(&name);
+    Ok(format!("data:{};base64,{}", mime, BASE64.encode(&bytes)))
+}
+
+/// Save raw cover image bytes to disk cache.
+fn save_cover_to_disk(cache_dir: &Path, hash: &str, ext: &str, bytes: &[u8]) -> Result<(), String> {
+    let covers_dir = cache_dir.join("covers");
+    fs::create_dir_all(&covers_dir).map_err(|e| e.to_string())?;
+    let path = covers_dir.join(format!("{}.{}", hash, ext));
+    fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Extract the first image from a ZIP as raw bytes + filename.
+fn extract_cover_bytes(path: &str) -> Result<Option<(Vec<u8>, String)>, String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let indices = sorted_image_indices(&mut archive);
+
+    if let Some(&first_idx) = indices.first() {
+        let mut entry = archive.by_index(first_idx).map_err(|e| e.to_string())?;
+        let name = entry.name().to_string();
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        Ok(Some((buf, name)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Get file extension from a filename, defaulting to "jpg".
+fn ext_from_filename(name: &str) -> &str {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg")
 }
 
 // ---------- TTS State ----------
@@ -165,16 +247,47 @@ pub async fn scan_folder(path: String) -> Result<Vec<ComicEntry>, String> {
 }
 
 #[tauri::command]
-pub async fn get_cover(path: String) -> Result<String, String> {
-    let file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let indices = sorted_image_indices(&mut archive);
+pub async fn get_cover(
+    path: String,
+    app: tauri::AppHandle,
+    cover_cache: State<'_, Mutex<CoverCache>>,
+) -> Result<String, String> {
+    // 1. Compute content hash from first 8KB
+    let hash = compute_file_hash(&path)?;
 
-    if let Some(&first_idx) = indices.first() {
-        read_entry_as_base64(&mut archive, first_idx)
-    } else {
-        Ok(String::new())
+    // 2. Check in-memory cache (L1)
+    if let Ok(cache) = cover_cache.lock() {
+        if let Some(cached) = cache.memory.get(&hash) {
+            return Ok(cached.clone());
+        }
     }
+
+    // 3. Check disk cache (L2)
+    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    if let Some(disk_path) = find_cached_cover(&cache_dir, &hash) {
+        let data_uri = read_cover_from_disk(&disk_path)?;
+        if let Ok(mut cache) = cover_cache.lock() {
+            cache.memory.insert(hash, data_uri.clone());
+        }
+        return Ok(data_uri);
+    }
+
+    // 4. Cache miss: extract from ZIP, save to disk, store in memory
+    let Some((bytes, name)) = extract_cover_bytes(&path)? else {
+        return Ok(String::new());
+    };
+
+    let ext = ext_from_filename(&name);
+    let _ = save_cover_to_disk(&cache_dir, &hash, ext, &bytes);
+
+    let mime = mime_for_filename(&name);
+    let data_uri = format!("data:{};base64,{}", mime, BASE64.encode(&bytes));
+
+    if let Ok(mut cache) = cover_cache.lock() {
+        cache.memory.insert(hash, data_uri.clone());
+    }
+
+    Ok(data_uri)
 }
 
 #[tauri::command]

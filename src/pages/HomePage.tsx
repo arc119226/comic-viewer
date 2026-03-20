@@ -44,33 +44,16 @@ export default function HomePage() {
     [setLastFolder]
   );
 
-  // Save scroll position on unmount so we can restore it on return
+  const loaded = useRef(false);
+  // Auto-load last folder on mount (only if not already loaded)
   useEffect(() => {
-    return () => {
-      sessionStorage.setItem("homeScrollY", String(window.scrollY));
-    };
-  }, []);
-
-  // Auto-load last folder on mount
-  useEffect(() => {
+    if (loaded.current) return;
+    loaded.current = true;
     const last = getLastFolder();
     if (last) {
       loadFolder(last);
     }
   }, []);
-
-  // Restore scroll position after comics finish loading
-  useEffect(() => {
-    if (comics.length > 0 && !scanning) {
-      const saved = sessionStorage.getItem("homeScrollY");
-      if (saved) {
-        requestAnimationFrame(() => {
-          window.scrollTo(0, parseInt(saved, 10));
-        });
-        sessionStorage.removeItem("homeScrollY");
-      }
-    }
-  }, [comics, scanning]);
 
   async function handleSelectFolder() {
     const selected = await open({ directory: true, recursive: false });
@@ -113,8 +96,8 @@ export default function HomePage() {
   }, [comics, search, sort]);
 
   return (
-    <div className="min-h-screen bg-neutral-900 p-6">
-      <header className="flex items-center justify-between mb-4">
+    <div className="h-screen flex flex-col bg-neutral-900 p-6">
+      <header className="flex items-center justify-between mb-4 shrink-0">
         <h1 className="text-2xl font-bold text-white">Comic Viewer</h1>
         <div className="flex items-center gap-3">
           {scanning && (
@@ -130,11 +113,11 @@ export default function HomePage() {
       </header>
 
       {folderPath && (
-        <p className="text-neutral-400 text-sm mb-4 truncate">{folderPath}</p>
+        <p className="text-neutral-400 text-sm mb-4 truncate shrink-0">{folderPath}</p>
       )}
 
       {comics.length > 0 && (
-        <div className="flex items-center gap-3 mb-4">
+        <div className="flex items-center gap-3 mb-4 shrink-0">
           <input
             type="text"
             value={search}
