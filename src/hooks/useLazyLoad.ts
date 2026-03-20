@@ -77,12 +77,24 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
     [comicPath, totalPages]
   );
 
-  // Load a page and preload the next PRELOAD_AHEAD pages in parallel.
+  const lastIndexRef = useRef(0);
+
+  // Load pages in scroll direction and preload ahead in parallel.
   // Also unload pages far from the current position to free memory.
   const loadWithPreload = useCallback(
     (index: number) => {
-      const end = Math.min(index + PRELOAD_AHEAD, totalPages - 1);
-      for (let i = index; i <= end; i++) {
+      const direction = index >= lastIndexRef.current ? 1 : -1;
+      lastIndexRef.current = index;
+
+      // Preload in scroll direction
+      const start = direction > 0
+        ? index
+        : Math.max(index - PRELOAD_AHEAD, 0);
+      const end = direction > 0
+        ? Math.min(index + PRELOAD_AHEAD, totalPages - 1)
+        : index;
+
+      for (let i = start; i <= end; i++) {
         loadPage(i); // fires in parallel (no await)
       }
 

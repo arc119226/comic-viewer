@@ -109,13 +109,15 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 - `src-tauri/src/commands.rs` — All Rust backend logic (file scanning, ZIP reading, text loading, TTS management, audio saving, persistent cover cache with SHA256 content-addressing)
 - `src/App.tsx` — Router with keep-alive layout (HomePage stays mounted, hidden via display:none when in reader)
 - `src/pages/HomePage.tsx` — Folder browser with search, sort, cover cache management (flex layout for virtual scroll)
-- `src/pages/ReaderPage.tsx` — Comic reader with scroll, lazy load, zoom
+- `src/pages/ReaderPage.tsx` — Comic reader with scroll, lazy load, zoom, reading progress, keyboard shortcuts (PageUp/Down/arrows/Space/F for fullscreen), page jump, image fade-in
 - `src/pages/TextReaderPage.tsx` — Text/markdown reader with font size controls and TTS
 - `src/components/ComicGrid.tsx` — Virtual scrolling grid using @tanstack/react-virtual (renders only visible rows)
 - `src/components/ComicCard.tsx` — Cover card with on-mount loading (virtualizer controls visibility) + text file icon variant
 - `src/components/TtsAudioPlayer.tsx` — Audio playback controls with save button
 - `src/components/TtsFloatingButton.tsx` — Floating "read aloud" button on text selection
-- `src/hooks/useLazyLoad.ts` — IntersectionObserver-based lazy loading for comic reader pages
+- `src/hooks/useLazyLoad.ts` — IntersectionObserver-based lazy loading with directional preload and page unloading
+- `src/hooks/useReadingProgress.ts` — Per-comic reading progress persistence (localStorage)
+- `src/components/PageIndicator.tsx` — Current page display with click-to-jump input
 - `src/hooks/useZoom.ts` — Zoom state management (Ctrl+scroll on window, keyboard shortcuts)
 - `src/hooks/useTts.ts` — TTS server lifecycle, audio playback, and save management
 - `src/hooks/useTextSelection.ts` — Mouse text selection detection for TTS
