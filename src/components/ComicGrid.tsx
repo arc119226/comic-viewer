@@ -60,6 +60,11 @@ export default function ComicGrid({ comics, coverCache, onCoverLoaded }: Props) 
     overscan: 3,
   });
 
+  // Force virtualizer to recalculate when layout parameters change (window resize)
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [rowVirtualizer, cols, containerWidth]);
+
   const getComicsForRow = useCallback(
     (rowIndex: number) => {
       const start = rowIndex * cols;

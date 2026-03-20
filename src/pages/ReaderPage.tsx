@@ -237,14 +237,14 @@ export default function ReaderPage() {
             <div
               key={i}
               ref={(el) => setPageRef(el, i)}
-              className="w-full max-w-4xl"
+              className="w-full max-w-4xl overflow-hidden"
               style={{ aspectRatio }}
             >
               {page.src ? (
                 <img
                   src={page.src}
                   alt={`Page ${i + 1}`}
-                  className="w-full h-auto transition-opacity duration-300"
+                  className="w-full h-full object-contain transition-opacity duration-300"
                   style={{ opacity: 0 }}
                   onLoad={(e) => {
                     (e.target as HTMLImageElement).style.opacity = "1";
