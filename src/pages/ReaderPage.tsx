@@ -19,6 +19,7 @@ export default function ReaderPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const pageOffsetsRef = useRef<number[]>([]);
 
   const { zoom } = useZoom(containerRef);
   const { pages, observeElement } = useLazyLoad(
@@ -40,31 +41,53 @@ export default function ReaderPage() {
       });
   }, [comicPath, navigate]);
 
-  // Track current page via scroll position
+  // Rebuild page offset cache
+  const updatePageOffsets = useCallback(() => {
+    pageOffsetsRef.current = pageRefs.current.map(
+      (el) => el?.offsetTop ?? 0
+    );
+  }, []);
+
+  // Track current page via scroll position (binary search)
   useEffect(() => {
     const scrollEl = scrollRef.current;
     if (!scrollEl || !comicInfo) return;
 
     function handleScroll() {
-      const scrollTop = scrollEl!.scrollTop;
-      const viewportMid = scrollTop + scrollEl!.clientHeight / 2;
+      const viewportMid = scrollEl!.scrollTop + scrollEl!.clientHeight / 2;
+      const offsets = pageOffsetsRef.current;
+      if (offsets.length === 0) return;
 
-      for (let i = 0; i < pageRefs.current.length; i++) {
-        const child = pageRefs.current[i];
-        if (!child) continue;
-        if (
-          child.offsetTop <= viewportMid &&
-          child.offsetTop + child.offsetHeight > viewportMid
-        ) {
-          setCurrentPage(i + 1);
-          break;
+      // Binary search: find the last page whose offsetTop <= viewportMid
+      let lo = 0;
+      let hi = offsets.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (offsets[mid] <= viewportMid) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
         }
       }
+      setCurrentPage(lo + 1);
     }
 
     scrollEl.addEventListener("scroll", handleScroll, { passive: true });
     return () => scrollEl.removeEventListener("scroll", handleScroll);
   }, [comicInfo]);
+
+  // Update offsets when pages change (images load) or container resizes
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    const observer = new ResizeObserver(() => {
+      updatePageOffsets();
+    });
+    observer.observe(scrollEl);
+
+    return () => observer.disconnect();
+  }, [updatePageOffsets]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -103,6 +126,8 @@ export default function ReaderPage() {
     );
   }
 
+  const aspectRatio = `${comicInfo.page_width} / ${comicInfo.page_height}`;
+
   return (
     <div className="h-screen flex flex-col bg-neutral-950">
       <TopBar
@@ -124,16 +149,19 @@ export default function ReaderPage() {
               key={i}
               ref={(el) => setPageRef(el, i)}
               className="w-full max-w-4xl"
-              style={{ minHeight: "400px" }}
+              style={{ aspectRatio }}
             >
               {page.src ? (
                 <img
                   src={page.src}
                   alt={`Page ${i + 1}`}
                   className="w-full h-auto"
+                  onLoad={updatePageOffsets}
                 />
               ) : (
-                <div className="w-full h-[400px] flex items-center justify-center bg-neutral-900">
+                <div
+                  className="w-full h-full flex items-center justify-center bg-neutral-900"
+                >
                   {page.loading ? (
                     <p className="text-neutral-500">
                       Loading page {i + 1}...

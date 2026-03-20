@@ -8,6 +8,8 @@ export interface ComicEntry {
 export interface ComicInfo {
   filename: string;
   total_pages: number;
+  page_width: number;
+  page_height: number;
 }
 
 export interface TextInfo {

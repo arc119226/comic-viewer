@@ -86,6 +86,7 @@ Adjust seed, temperature, top_P, top_K, speed in browser. Copy params and update
 - **Cover loading**: Two-phase — `scan_folder` returns file list instantly, `get_cover` loads covers on demand via virtual scroll (only visible cards mount and trigger loading). Two-level cache: L1 in-memory HashMap (SHA256 → data URI) for same-session hits, L2 persistent disk cache (`app_cache_dir/covers/{sha256}.{ext}` with raw image bytes) for cross-session hits. Cache key is SHA256 of first 8KB of ZIP (content-addressed — survives file rename/move)
 - **HomePage keep-alive**: HomePage stays mounted (hidden via `display:none`) when navigating to readers, preserving all state (covers, scroll position, search, sort) without re-fetching
 - **Virtual scrolling**: ComicGrid uses `@tanstack/react-virtual` to only render visible rows (~30-50 cards), handling 1000+ comics efficiently
+- **Comic reader optimizations**: ZIP index cache (`ZipIndexCache`) avoids re-scanning ZIP entries per page; parallel preloading (5 pages ahead via concurrent IPC); aspect-ratio placeholders from first page dimensions (no layout shift); binary search scroll tracking; automatic page unloading (>20 pages from current) to cap memory usage
 - **TTS lifecycle**: Rust manages Python process via `std::process::Command`, stores `Child` in `Mutex<TtsState>` managed state; communicates via HTTP (reqwest); process killed on window close
 
 ## TTS Compatibility Patches

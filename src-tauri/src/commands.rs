@@ -26,6 +26,8 @@ pub struct ComicEntry {
 pub struct ComicInfo {
     pub filename: String,
     pub total_pages: usize,
+    pub page_width: u32,
+    pub page_height: u32,
 }
 
 #[derive(Serialize)]
@@ -114,6 +116,100 @@ fn ext_from_filename(name: &str) -> &str {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("jpg")
+}
+
+// ---------- ZIP Index Cache ----------
+
+pub struct ZipIndexCache {
+    pub cache: HashMap<String, Vec<usize>>,
+}
+
+impl Default for ZipIndexCache {
+    fn default() -> Self {
+        ZipIndexCache {
+            cache: HashMap::new(),
+        }
+    }
+}
+
+/// Get or compute sorted image indices for a ZIP file, using cache.
+fn get_sorted_indices(
+    path: &str,
+    index_cache: &Mutex<ZipIndexCache>,
+) -> Result<Vec<usize>, String> {
+    if let Ok(cache) = index_cache.lock() {
+        if let Some(indices) = cache.cache.get(path) {
+            return Ok(indices.clone());
+        }
+    }
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let indices = sorted_image_indices(&mut archive);
+    if let Ok(mut cache) = index_cache.lock() {
+        cache.cache.insert(path.to_string(), indices.clone());
+    }
+    Ok(indices)
+}
+
+/// Parse image dimensions from raw bytes (JPEG SOF or PNG IHDR).
+fn parse_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 {
+        return None;
+    }
+
+    // PNG: 89 50 4E 47 header, IHDR at offset 16 (width 4B + height 4B)
+    if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+        let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+        return Some((width, height));
+    }
+
+    // JPEG: FF D8 header, scan for SOF0 (FF C0) or SOF2 (FF C2) marker
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        let mut i = 2;
+        while i + 9 < bytes.len() {
+            if bytes[i] != 0xFF {
+                i += 1;
+                continue;
+            }
+            let marker = bytes[i + 1];
+            // SOF0, SOF1, SOF2 markers contain dimensions
+            if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
+                let height = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                let width = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+                return Some((width, height));
+            }
+            // Skip to next marker using segment length
+            if i + 3 < bytes.len() {
+                let seg_len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+                i += 2 + seg_len;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // WebP: RIFF....WEBP, VP8 chunk at offset 12
+    if bytes.len() >= 30 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        // VP8 lossy: starts at offset 12 with "VP8 "
+        if &bytes[12..16] == b"VP8 " && bytes.len() >= 30 {
+            let width = u16::from_le_bytes([bytes[26], bytes[27]]) as u32 & 0x3FFF;
+            let height = u16::from_le_bytes([bytes[28], bytes[29]]) as u32 & 0x3FFF;
+            return Some((width, height));
+        }
+        // VP8L lossless: "VP8L"
+        if &bytes[12..16] == b"VP8L" && bytes.len() >= 25 {
+            let b0 = bytes[21] as u32;
+            let b1 = bytes[22] as u32;
+            let b2 = bytes[23] as u32;
+            let b3 = bytes[24] as u32;
+            let width = (b0 | ((b1 & 0x3F) << 8)) + 1;
+            let height = (((b1 >> 6) | (b2 << 2) | ((b3 & 0xF) << 10))) + 1;
+            return Some((width, height));
+        }
+    }
+
+    None
 }
 
 // ---------- TTS State ----------
@@ -291,27 +387,44 @@ pub async fn get_cover(
 }
 
 #[tauri::command]
-pub async fn get_comic_info(path: String) -> Result<ComicInfo, String> {
-    let file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let indices = sorted_image_indices(&mut archive);
+pub async fn get_comic_info(
+    path: String,
+    index_cache: State<'_, Mutex<ZipIndexCache>>,
+) -> Result<ComicInfo, String> {
+    let indices = get_sorted_indices(&path, &index_cache)?;
     let filename = Path::new(&path)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
 
+    // Parse dimensions from first page (for aspect-ratio placeholders)
+    let (page_width, page_height) = if let Some(&first_idx) = indices.first() {
+        let file = fs::File::open(&path).map_err(|e| e.to_string())?;
+        let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
+        let mut entry = archive.by_index(first_idx).map_err(|e| e.to_string())?;
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        parse_image_dimensions(&buf).unwrap_or((800, 1200))
+    } else {
+        (800, 1200)
+    };
+
     Ok(ComicInfo {
         filename,
         total_pages: indices.len(),
+        page_width,
+        page_height,
     })
 }
 
 #[tauri::command]
-pub async fn load_page(path: String, index: usize) -> Result<String, String> {
-    let file = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let indices = sorted_image_indices(&mut archive);
+pub async fn load_page(
+    path: String,
+    index: usize,
+    index_cache: State<'_, Mutex<ZipIndexCache>>,
+) -> Result<String, String> {
+    let indices = get_sorted_indices(&path, &index_cache)?;
 
     let real_index = indices.get(index).ok_or_else(|| {
         format!(
@@ -321,6 +434,8 @@ pub async fn load_page(path: String, index: usize) -> Result<String, String> {
         )
     })?;
 
+    let file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     read_entry_as_base64(&mut archive, *real_index)
 }
 

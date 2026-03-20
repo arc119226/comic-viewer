@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 const PRELOAD_AHEAD = 5;
+const UNLOAD_DISTANCE = 20;
 
 interface PageData {
   src: string | null;
@@ -76,12 +77,28 @@ export function useLazyLoad(comicPath: string, totalPages: number) {
     [comicPath, totalPages]
   );
 
-  // Load a page and preload the next PRELOAD_AHEAD pages
+  // Load a page and preload the next PRELOAD_AHEAD pages in parallel.
+  // Also unload pages far from the current position to free memory.
   const loadWithPreload = useCallback(
     (index: number) => {
-      for (let i = index; i <= Math.min(index + PRELOAD_AHEAD, totalPages - 1); i++) {
-        loadPage(i);
+      const end = Math.min(index + PRELOAD_AHEAD, totalPages - 1);
+      for (let i = index; i <= end; i++) {
+        loadPage(i); // fires in parallel (no await)
       }
+
+      // Unload pages far from current position
+      setPages((prev) => {
+        let changed = false;
+        const next = [...prev];
+        for (let i = 0; i < next.length; i++) {
+          if (Math.abs(i - index) > UNLOAD_DISTANCE && next[i].src) {
+            next[i] = { src: null, loading: false };
+            loadedRef.current.delete(i);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     },
     [loadPage, totalPages]
   );
